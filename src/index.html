@@ -1,0 +1,153 @@
+<title>CNC 가공일정 수립</title>
+<meta name="description" content="일정관리 프로그램 발주 붙여넣기 → 호기 자동 가배정 → 간트 검토 → 9번 확정시트/설비1~A 입력용 엑셀 내보내기">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>/*__APP_CSS__*/</style>
+
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1>CNC 가공일정 수립</h1>
+        <p class="brand-sub" id="sourceLine">예시 데이터로 열려 있습니다 · 회사 통합문서(.xlsm)를 불러오세요</p>
+      </div>
+    </div>
+    <div class="actions">
+      <label class="btn" for="fileInput">엑셀 불러오기</label>
+      <input type="file" id="fileInput" accept=".xlsm,.xlsx,.xls" hidden>
+      <button class="btn" id="btnPaste" type="button">원본 붙여넣기</button>
+      <button class="btn" id="btnSettings" type="button">기준 설정</button>
+      <button class="btn primary" id="btnAuto" type="button">자동 일정수립</button>
+      <button class="btn" id="btnExport" type="button">결과 엑셀 내보내기</button>
+    </div>
+  </header>
+
+  <section class="flow" aria-label="작업 순서">
+    <ol>
+      <li><b>불러오기</b> 통합문서(.xlsm) 또는 일정관리 프로그램 복사분 붙여넣기</li>
+      <li><b>자동 일정수립</b> 미배정 전 품목을 납기순으로 가배정</li>
+      <li><b>검토·수정</b> 간트/품목에서 호기 변경, 수기검토 품목 배정</li>
+      <li><b>내보내기</b> 9번 확정시트 붙여넣기용 + 설비1~A 입력요약</li>
+    </ol>
+  </section>
+
+  <section class="kpis" id="kpis" aria-label="요약"></section>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" class="tab" data-tab="items" aria-selected="true" id="tab-items">품목 목록</button>
+    <button role="tab" class="tab" data-tab="gantt" aria-selected="false" id="tab-gantt">간트차트</button>
+    <button role="tab" class="tab" data-tab="review" aria-selected="false" id="tab-review">수기검토 <span class="count" id="reviewCount"></span></button>
+    <button role="tab" class="tab" data-tab="master" aria-selected="false" id="tab-master">기준 점검</button>
+  </nav>
+
+  <main>
+    <section class="panel" id="panel-items">
+      <div class="toolbar">
+        <input type="search" id="itemSearch" placeholder="계획번호·제품코드·부품코드 검색" aria-label="품목 검색">
+        <select id="itemState" aria-label="상태 필터">
+          <option value="">전체 상태</option>
+          <option>미배정</option><option>가배정</option><option>가배정(지연)</option><option>일부가배정</option>
+          <option>수기검토</option><option>추가배정</option><option>배정완료</option><option>배정초과</option>
+        </select>
+        <select id="itemMain" aria-label="대분류 필터"><option value="">전체 대분류</option></select>
+        <span class="spacer"></span>
+        <span class="hint" id="itemCountText"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="grid" id="itemTable">
+          <thead><tr>
+            <th>상태</th><th>계획번호</th><th>제품코드</th><th>부품코드</th><th class="num">발주량</th><th class="num">잔량</th>
+            <th>요청일</th><th>분류</th><th>재질</th><th class="num">장비일</th><th>권장</th><th>가배정 호기 / 기간</th><th>판정 사유</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="pager" id="itemPager"></div>
+    </section>
+
+    <section class="panel" id="panel-gantt" hidden>
+      <div class="toolbar">
+        <select id="ganttRoom" aria-label="방 선택"><option value="">전체 방</option></select>
+        <input type="search" id="ganttSearch" placeholder="호기 번호 또는 부품코드" aria-label="간트 검색">
+        <label class="check"><input type="checkbox" id="ganttBusy" checked> 일정 있는 호기만</label>
+        <span class="spacer"></span>
+        <span class="legend"><i class="lg confirmed"></i>확정 <i class="lg draft"></i>가배정 <i class="lg late"></i>납기초과 <i class="lg block"></i>고장/휴 <i class="lg delay"></i>완료확인 필요</span>
+      </div>
+      <div class="gantt" id="gantt" tabindex="0" aria-label="호기별 간트차트">
+        <div class="gantt-head" id="ganttHead"></div>
+        <div class="gantt-body" id="ganttBody"></div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-review" hidden>
+      <div class="review" id="reviewList"></div>
+    </section>
+
+    <section class="panel" id="panel-master" hidden>
+      <div class="master" id="masterList"></div>
+    </section>
+  </main>
+</div>
+
+<aside class="drawer" id="drawer" hidden aria-label="품목 상세">
+  <div class="drawer-head">
+    <div>
+      <p class="eyebrow" id="dwEyebrow"></p>
+      <h2 id="dwTitle"></h2>
+    </div>
+    <button class="icon-btn" id="dwClose" type="button" aria-label="닫기">✕</button>
+  </div>
+  <div class="drawer-body" id="dwBody"></div>
+</aside>
+
+<dialog id="dlgPaste" class="dialog">
+  <form method="dialog" id="pasteForm">
+    <h2>일정관리 프로그램 원본 붙여넣기</h2>
+    <p class="hint">일정관리 프로그램에서 발주 목록을 <b>헤더 행 포함</b>으로 복사해 아래에 붙여넣으세요. 계획번호·제품코드·부품코드·발주량·요청일·재질 열을 헤더 이름으로 찾습니다. 헤더가 없으면 기존 1_원본붙여넣기 열 위치(E/G/H/I/L/AS)를 사용합니다.</p>
+    <textarea id="pasteText" rows="12" spellcheck="false" placeholder="여기에 Ctrl+V"></textarea>
+    <p class="hint" id="pastePreview"></p>
+    <div class="dialog-actions">
+      <button class="btn" value="cancel" type="submit">닫기</button>
+      <button class="btn primary" id="pasteApply" type="button">원본 교체</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgSettings" class="dialog">
+  <form method="dialog" id="settingsForm">
+    <h2>기준 설정</h2>
+    <div class="form-grid">
+      <label for="setBase">기준게시일 (배정 시작 가능일)</label>
+      <input type="date" id="setBase">
+      <label for="setMax">품목당 최대 호기 수</label>
+      <input type="number" id="setMax" min="1" max="30" value="10">
+      <label for="setAllowB">B-2차후보 자동선택</label>
+      <select id="setAllowB"><option value="1">허용 (A후보가 늦게 비면 사용)</option><option value="0">A후보만</option></select>
+      <label for="setSlack">B후보 불이익 (일)</label>
+      <input type="number" id="setSlack" min="0" max="30" value="2">
+      <label for="setExpand">납기 못 맞추면 호기 확장</label>
+      <select id="setExpand"><option value="1">권장대수 상한까지 확장</option><option value="0">권장대수 하한 고정</option></select>
+      <label for="setDelay">완료일 지난 미완료 일정</label>
+      <select id="setDelay"><option value="block">완료확인 전 신규배정 금지 (기존 방식)</option><option value="assumeDone">계획완료일에 끝난 것으로 간주</option></select>
+      <label for="setActualOk">완료 판정에 실적확인=Y 필요</label>
+      <select id="setActualOk"><option value="0">아니오 (누적실적 ≥ 계획수량)</option><option value="1">예</option></select>
+      <label for="setMatMap">추가 소재계열 매핑</label>
+      <textarea id="setMatMap" rows="3" spellcheck="false" placeholder="H5J=TK&#10;C3604=BECU"></textarea>
+    </div>
+    <p class="hint">설정을 바꾸면 자동 가배정은 지우고 다시 계산합니다. 수기 가배정은 유지됩니다.</p>
+    <div class="dialog-actions">
+      <button class="btn" value="cancel" type="submit">닫기</button>
+      <button class="btn primary" id="settingsApply" type="button">적용</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<div class="busy" id="busy" hidden><div class="busy-card"><span class="spinner" aria-hidden="true"></span><span id="busyText">계산 중…</span></div></div>
+
+<script>/*__XLSX__*/</script>
+<script>/*__ENGINE__*/</script>
+<script>/*__WORKBOOK__*/</script>
+<script>/*__DEMO__*/</script>
+<script>/*__APP_JS__*/</script>

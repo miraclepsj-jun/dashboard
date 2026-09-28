@@ -1,0 +1,4 @@
+node_modules/
+*.xlsm
+*.xlsx
+!test/fixtures/*.xlsx

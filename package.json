@@ -1,0 +1,13 @@
+{
+  "name": "cnc-schedule-planner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CNC 가공일정 자동수립 (엑셀 통합문서 연동, 단일 HTML)",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "xlsx": "0.18.5"
+  }
+}
