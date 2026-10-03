@@ -275,3 +275,12 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 @media (max-width: 700px) { .flow { display: none; } .gantt { --left: 84px; --day: 26px; } }
 .cand-table td { white-space: nowrap; }
 .cand-table td.reason { white-space: normal; min-width: 240px; }
+
+.edit-table td { white-space: nowrap; vertical-align: middle; }
+.edit-table input { padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); font: 12.5px var(--mono); }
+.edit-table .w-mc { width: 64px; }
+.edit-table .w-num { width: 56px; }
+.edit-table .w-qty { width: 92px; }
+.edit-table .actions-cell { display: flex; gap: 4px; }
+.late-box { border-color: var(--late); background: var(--late-soft); }
+.late-text { color: var(--late); font-weight: 600; }

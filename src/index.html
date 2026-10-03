@@ -47,7 +47,7 @@
         <input type="search" id="itemSearch" placeholder="계획번호·제품코드·부품코드 검색" aria-label="품목 검색">
         <select id="itemState" aria-label="상태 필터">
           <option value="">전체 상태</option>
-          <option>미배정</option><option>가배정</option><option>가배정(지연)</option><option>일부가배정</option>
+          <option>미배정</option><option>가배정</option><option>가배정(지연)</option><option>지연확인</option><option>일부가배정</option>
           <option>수기검토</option><option>추가배정</option><option>배정완료</option><option>배정초과</option>
         </select>
         <select id="itemMain" aria-label="대분류 필터"><option value="">전체 대분류</option></select>
@@ -133,11 +133,9 @@
       <label for="setSetupLimit">작업자 1인 하루 신규셋팅 한도 (0=제한 없음)</label>
       <input type="number" id="setSetupLimit" min="0" max="30" value="5">
       <label for="setAllowB">B-2차후보 자동선택</label>
-      <select id="setAllowB"><option value="1">허용 (A후보가 늦게 비면 사용)</option><option value="0">A후보만</option></select>
-      <label for="setSlack">B후보 불이익 (일)</label>
-      <input type="number" id="setSlack" min="0" max="30" value="2">
-      <label for="setExpand">납기 못 맞추면 호기 확장</label>
-      <select id="setExpand"><option value="1">권장대수 상한까지 확장</option><option value="0">권장대수 하한 고정</option></select>
+      <select id="setAllowB"><option value="1">방마스터 적합 호기가 모자랄 때만 보충</option><option value="0">사용 안 함</option></select>
+      <label for="setExpand">납기 못 맞추면 호기 자동 추가</label>
+      <select id="setExpand"><option value="0">추가 안 함 (담당자가 조정)</option><option value="1">최대 호기 수까지 자동 추가</option></select>
       <label for="setDelay">완료일 지난 미완료 일정</label>
       <select id="setDelay"><option value="block">완료확인 전 신규배정 금지 (기존 방식)</option><option value="assumeDone">계획완료일에 끝난 것으로 간주</option></select>
       <label for="setActualOk">완료 판정에 실적확인=Y 필요</label>

@@ -26,7 +26,7 @@
   };
 
   const today = E.todaySerial();
-  const SETTINGS_VERSION = 3;
+  const SETTINGS_VERSION = 4;
   const DEFAULTS = {
     v: SETTINGS_VERSION,
     baseOffset: 1,
@@ -37,8 +37,7 @@
     perGroupMax: 1,
     setupLimitPerWorkerDay: 5,
     allowB: true,
-    bSlackDays: 2,
-    expandToDue: true,
+    expandToDue: false,
     delayPolicy: 'block',
     requireActualOk: false,
     matMap: '',
@@ -70,7 +69,6 @@
       perGroupMax: S.settings.perGroupMax,
       setupLimitPerWorkerDay: S.settings.setupLimitPerWorkerDay,
       allowB: S.settings.allowB,
-      bSlackDays: S.settings.bSlackDays,
       expandToDue: S.settings.expandToDue,
       delayPolicy: S.settings.delayPolicy,
       requireActualOk: S.settings.requireActualOk,
@@ -171,7 +169,7 @@
     const kp = [
       { label: '배정 대상 품목', value: nf(s.items), sub: '배정완료 ' + nf(s.done) + '건 포함' },
       { label: '가배정', value: nf(s.draft), sub: (S.settings.allocMode === 'spread' ? '분산형' : '집중형') + ' · 호기 ' + nf(s.machines) + '대 · 배정행 ' + nf(s.drafts), cls: 'draft' },
-      { label: '납기 초과 예상', value: nf(s.late), sub: '요청일보다 늦게 끝나는 가배정', cls: 'late' },
+      { label: '납기 초과 확인필요', value: nf(s.late), sub: '담당자 확인 완료 ' + nf(s.lateAck) + '건', cls: 'late' },
       { label: '수기검토', value: nf(s.review), sub: '자동기준 밖 품목', cls: 'review' },
       { label: '미처리', value: nf(s.todo), sub: s.todo ? '[자동 일정수립] 실행 필요' : '남은 품목 없음' },
       { label: '가배정 최종완료', value: last ? E.fmtMD(last) : '-', sub: '완료확인 필요 호기 ' + delayed + '대' },
@@ -432,7 +430,7 @@
       const r = P.results[it.key];
       let g = null;
       if (st === '수기검토') g = reasonGroup(r && r.reason);
-      else if (st === '가배정(지연)') g = '납기 초과 예상 (가배정됨)';
+      else if (st === '가배정(지연)') g = '납기 초과 – 담당자 조정 필요';
       if (!g) continue;
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(it);
@@ -444,7 +442,7 @@
     const sorted = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
     $('reviewList').innerHTML = sorted
       .map(([g, list], gi) => {
-        const fix = (FIX.find(([re]) => re.test(g)) || [null, g.startsWith('납기') ? '호기를 추가하거나 다른 품목과 순서를 조정하세요. 품목을 열어 [선택호기 가배정]으로 다시 배분할 수 있습니다.' : ''])[1];
+        const fix = (FIX.find(([re]) => re.test(g)) || [null, g.startsWith('납기') ? '품목을 열어 가배정표에서 가공기간(장비일)·시작일·호기를 바꾸거나 [호기 추가·재배분]으로 다른 호기를 넣으세요. 그대로 진행하면 [지연 확인 완료]를 누르면 이 목록에서 빠집니다.' : ''])[1];
         const rows = list
           .slice(0, 300)
           .map((it) => {
@@ -621,7 +619,14 @@
       ['프로그램 설비', it.refMachines.length ? it.refMachines.join('/') : '-'],
     ];
     let html = '<dl class="facts">' + facts.map(([k, v]) => '<div><dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd></div>').join('') + '</dl>';
-    if (r.reason || it.note) html += '<div class="box' + (P.itemState(it).label === '수기검토' ? ' warn' : '') + '"><h3>판정</h3><p class="hint">' + esc([r.reason, it.note].filter(Boolean).join(' / ')) + '</p></div>';
+    if (r.late > 0) {
+      html +=
+        '<div class="box ' + (r.lateAck ? '' : 'late-box') + '"><h3>납기초과 ' + r.late + '일 · 예상완료 ' + E.fmtYMD(r.finish) + ' (요청일 ' + E.fmtYMD(it.due) + ')</h3>' +
+        '<p class="hint">아래 가배정표에서 가공기간(장비일)이나 호기를 바꾸거나, [호기 추가·재배분]으로 다른 호기를 더 넣어 조정하세요. 이대로 진행하기로 했으면 지연 확인을 눌러 목록에서 분리합니다.</p>' +
+        '<div class="row"><button class="btn small" type="button" id="dwAck">' + (r.lateAck ? '지연 확인 취소' : '지연 확인 완료') + '</button></div></div>';
+    } else if (r.reason || it.note)
+      html += '<div class="box' + (P.itemState(it).label === '수기검토' ? ' warn' : '') + '"><h3>판정</h3><p class="hint">' + esc([r.reason, it.note].filter(Boolean).join(' / ')) + '</p></div>';
+    if (it.note && r.late > 0) html += '<p class="hint">' + esc(it.note) + '</p>';
 
     const ds = draftsOf(it.key);
     const confirmedRows = (S.model.confirmed || []).filter((c) => E.itemKey(c.planNo, c.productCode, c.partCode) === it.key);
@@ -629,11 +634,27 @@
     if (!ds.length && !confirmedRows.length) html += '<p class="hint">배정 없음</p>';
     if (confirmedRows.length)
       html += '<div class="alloc">' + confirmedRows.map((c) => '<span class="chip">확정 <b>' + esc(c.machine) + '</b> ' + E.fmtMD(c.start) + '~' + E.fmtMD(c.end) + ' · ' + nf(c.qty) + '</span>').join('') + '</div>';
-    if (ds.length)
+    if (ds.length) {
       html +=
-        '<div class="alloc">' +
-        ds.map((d) => '<span class="chip draft">' + (d.manual ? '수기' : '자동') + ' <b>' + esc(d.machine) + '</b> ' + esc(P.groupOf[d.machine] || '') + (P.workerByMachine[d.machine] ? ' ' + esc(P.workerByMachine[d.machine]) : '') + ' · ' + E.fmtMD(d.start) + '~' + E.fmtMD(d.end) + ' · ' + nf(d.qty) + '<button type="button" data-rmdraft="' + d.id + '" aria-label="' + esc(d.machine) + '호기 가배정 취소">✕</button></span>').join('') +
-        '</div><div class="row"><button class="btn small danger" type="button" id="dwClearDrafts">이 품목 가배정 모두 취소</button></div>';
+        '<div class="table-wrap"><table class="grid edit-table"><thead><tr><th>구분</th><th>호기</th><th>방 · 담당</th><th>시작일</th><th class="num">장비일</th><th>완료일</th><th class="num">수량</th><th></th></tr></thead><tbody>' +
+        ds
+          .map((d) => {
+            const late = it.due != null && d.end > it.due;
+            return (
+              '<tr data-draftrow="' + d.id + '"><td>' + (d.manual ? '수기' : '자동') + '</td>' +
+              '<td><input type="text" class="w-mc" data-f="machine" value="' + esc(d.machine) + '" aria-label="호기"></td>' +
+              '<td>' + esc(P.groupOf[d.machine] || '') + (P.workerByMachine[d.machine] ? ' · ' + esc(P.workerByMachine[d.machine]) : '') + '</td>' +
+              '<td><input type="date" data-f="start" value="' + E.fmtYMD(d.start) + '" aria-label="시작일"></td>' +
+              '<td><input type="number" class="w-num" data-f="days" min="1" value="' + d.days + '" aria-label="장비일"></td>' +
+              '<td class="when' + (late ? ' late-text' : '') + '">' + E.fmtMD(d.end) + '</td>' +
+              '<td><input type="number" class="w-qty" data-f="qty" min="0" step="100" value="' + d.qty + '" aria-label="수량"></td>' +
+              '<td class="actions-cell"><button class="btn small" type="button" data-apply="' + d.id + '">적용</button> <button class="btn small danger" type="button" data-rmdraft="' + d.id + '" aria-label="' + esc(d.machine) + '호기 가배정 취소">삭제</button></td></tr>'
+            );
+          })
+          .join('') +
+        '</tbody></table></div><p class="hint" id="dwEditMsg">값을 바꾸고 [적용]을 누르세요. 다른 일정과 겹치면 적용되지 않습니다. 담당자가 조정한 품목은 자동 일정수립을 다시 해도 유지됩니다.</p>' +
+        '<div class="row"><label class="check"><input type="checkbox" id="dwPush" checked> 겹치는 뒤 가배정은 뒤로 밀기</label><button class="btn small" type="button" id="dwRealloc">호기 추가·재배분</button><button class="btn small danger" type="button" id="dwClearDrafts">이 품목 가배정 모두 취소</button></div>';
+    }
     html += '</div>';
 
     // 후보
@@ -823,7 +844,6 @@
     $('setPerGroup').value = s.perGroupMax;
     $('setSetupLimit').value = s.setupLimitPerWorkerDay;
     $('setAllowB').value = s.allowB ? '1' : '0';
-    $('setSlack').value = s.bSlackDays;
     $('setExpand').value = s.expandToDue ? '1' : '0';
     $('setDelay').value = s.delayPolicy;
     $('setActualOk').value = s.requireActualOk ? '1' : '0';
@@ -847,7 +867,6 @@
       perGroupMax: num('setPerGroup', 1, 1),
       setupLimitPerWorkerDay: num('setSetupLimit', 5, 0),
       allowB: $('setAllowB').value === '1',
-      bSlackDays: Math.max(0, Number($('setSlack').value) || 0),
       expandToDue: $('setExpand').value === '1',
       delayPolicy: $('setDelay').value,
       requireActualOk: $('setActualOk').value === '1',
@@ -965,10 +984,39 @@
       const rm = e.target.closest('[data-rmdraft]');
       if (rm) {
         S.planner.removeDraft(Number(rm.dataset.rmdraft));
-        const it = S.planner.itemByKey[S.openKey];
-        if (!S.planner.drafts.some((d) => d.itemKey === it.key)) delete S.planner.results[it.key];
         saveDrafts();
         return renderAll();
+      }
+      const ap = e.target.closest('[data-apply]');
+      if (ap) {
+        const row = ap.closest('tr');
+        const val = (f) => row.querySelector('[data-f="' + f + '"]').value;
+        const res = S.planner.updateDraft(Number(ap.dataset.apply), { machine: val('machine'), start: E.toSerial(val('start')), days: Number(val('days')), qty: Number(val('qty')), pushNext: $('dwPush').checked });
+        if (!res.ok) {
+          $('dwEditMsg').textContent = res.error;
+          $('dwEditMsg').classList.add('late-text');
+          return;
+        }
+        saveDrafts();
+        toast('가배정을 변경했습니다' + (res.pushed ? ' · 뒤 가배정 ' + res.pushed + '건을 밀었습니다' : ''));
+        return renderAll();
+      }
+      if (e.target.id === 'dwAck') {
+        const r = S.planner.results[S.openKey];
+        S.planner.ackLate(S.openKey, !(r && r.lateAck));
+        saveDrafts();
+        return renderAll();
+      }
+      if (e.target.id === 'dwRealloc') {
+        const machines = draftsOf(S.openKey).map((d) => d.machine);
+        S.planner.removeDraftsForItem(S.openKey);
+        saveDrafts();
+        renderAll();
+        $('dwMachines').value = machines.join('/');
+        syncPicks();
+        $('dwMachines').focus();
+        $('dwPreviewText').textContent = '기존 호기 ' + machines.join('/') + ' 에 추가할 호기를 후보표에서 체크하거나 입력한 뒤 [선택호기 가배정]을 누르세요';
+        return;
       }
       if (e.target.id === 'dwClearDrafts') {
         S.planner.removeDraftsForItem(S.openKey);

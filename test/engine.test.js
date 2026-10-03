@@ -200,3 +200,61 @@ test('셋팅 수: 같은 부품을 이어서 가공하면 신규셋팅으로 세
   assert.equal(P._isContinuation('519', day, it.partCode), true);
   assert.equal(P.startFor('519', TODAY + 1, 3, it.partCode), day);
 });
+
+test('방마스터 우선: 1순위 방(소재계열+우선생산성분류 일치) 호기를 먼저 쓴다', () => {
+  const m = Demo.build(TODAY);
+  m.raw = [{ planNo: 'R1', productCode: 'GX1', partCode: 'TEGX111AM-DGP', qty: 20000, reqDate: TODAY + 10, material: 'TK-B' }];
+  const P = new E.Planner(m, { today: TODAY });
+  P.autoPlan();
+  const ds = P.drafts.filter((d) => d.partCode === 'TEGX111AM-DGP');
+  assert.ok(ds.length >= 1);
+  // TK 커터 품목: 6번방(TK+커터)이 1순위, 5번방(TK/H3J, 우선생산성 없음)은 1순위가 모자랄 때만
+  assert.ok(ds.every((d) => P.groupOf[d.machine] === '6번방'), JSON.stringify(ds.map((d) => d.machine)));
+});
+
+test('담당자 조정: 가배정 기간/호기 변경, 겹침 거절, 지연 확인', () => {
+  const m = Demo.build(TODAY);
+  m.raw = [
+    { planNo: 'L1', productCode: 'GX1', partCode: 'TEGX121AM-DGP', qty: 9000, reqDate: TODAY + 2, material: 'TK-B' },
+    { planNo: 'L2', productCode: 'GX2', partCode: 'TEGX122AM-DGP', qty: 3000, reqDate: TODAY + 20, material: 'TK-B' },
+  ];
+  const P = new E.Planner(m, { today: TODAY });
+  P.autoPlan();
+  const it = P.items[0];
+  const d = P.drafts.find((x) => x.itemKey === it.key);
+  assert.ok(P.results[it.key].late > 0, '요청일 이틀 뒤라 늦어야 함');
+  assert.equal(P.itemState(it).label, '가배정(지연)');
+  // 다른 품목 일정과 겹치게 옮기면 거절
+  const other = P.drafts.find((x) => x.itemKey !== it.key);
+  const bad = P.updateDraft(d.id, { machine: other.machine, start: other.start });
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /겹칩니다/);
+  // 가공기간 늘리기 (뒤 가배정이 있으면 밀어냄)
+  const ok = P.updateDraft(d.id, { days: d.days + 3, pushNext: true });
+  assert.equal(ok.ok, true);
+  assert.equal(d.end, d.start + d.days - 1);
+  assert.equal(P.results[it.key].decision, '수기가배정');
+  assert.ok(P.timeline.segments(d.machine).some((s) => s.draftId === d.id && s.e === d.end));
+  // 지연 확인 → 상태 분리, 일정 바뀌면 다시 확인 필요
+  assert.ok(P.ackLate(it.key, true));
+  assert.equal(P.itemState(it).label, '지연확인');
+  assert.equal(P.summary().lateAck, 1);
+  P.updateDraft(d.id, { days: d.days + 1 });
+  assert.equal(P.itemState(it).label, '가배정(지연)');
+  // 담당자 조정분은 자동 재계산에도 유지
+  P.clearAutoDrafts();
+  P.autoPlan();
+  assert.equal(P.drafts.filter((x) => x.itemKey === it.key).length, 1);
+
+  // 뒤에 붙은 가배정을 밀고 연장
+  const segs = P.timeline.segments(d.machine).filter((x) => x.kind === 'draft' && x.draftId !== d.id && x.s > d.end);
+  if (segs.length) {
+    const nextS = segs[0].s;
+    const gap = nextS - d.end - 1;
+    assert.equal(P.updateDraft(d.id, { days: d.days + gap + 1 }).ok, false);
+    const r2 = P.updateDraft(d.id, { days: d.days + gap + 1, pushNext: true });
+    assert.equal(r2.ok, true);
+    const after = P.timeline.segments(d.machine).slice().sort((a, b) => a.s - b.s);
+    for (let i = 1; i < after.length; i++) assert.ok(after[i].s > after[i - 1].effEnd);
+  }
+});

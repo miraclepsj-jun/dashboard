@@ -915,6 +915,7 @@
           bdMaxLen: mc.bdMaxLen,
           status: conditional ? '조건부가능' : '가능',
           score,
+          roomScore: re.score,
           roomReason: re.reason,
           note,
           sameCont,
@@ -1117,6 +1118,7 @@
       this.drafts = this.drafts.filter((x) => x.id !== id);
       this.timeline.removeDrafts((seg) => seg.draftId === id);
       this._rebuildSetupCount();
+      if (d) this._refreshResult(d.itemKey);
       return d;
     }
     clearAutoDrafts() {
@@ -1168,36 +1170,56 @@
     }
 
     /**
-     * 일괄배정용 호기 선택: 기술/방 판정을 통과한 A·B 후보 중 "먼저 비는 호기"를 우선.
-     * B-2차후보는 bSlackDays 만큼 늦게 비는 것으로 간주(=A 우선), 동일부품 연속가공은 1일 우대.
-     * C-조건부, 일정주의(지연), 완료확인 필요 호기는 자동선택하지 않는다.
+     * 방마스터 적합 단계: 0 = 기본소재계열과 우선생산성분류가 모두 맞는 방(방마스터 1순위),
+     * 1 = 그 밖의 A등급(소재계열만 맞고 현재소재도 같은 호기), 2 = B-2차후보.
      */
-    batchPick(cands, count, perDays, from, partCode) {
-      const allowB = this.opts.allowB !== false;
-      const slack = this.opts.bSlackDays != null ? this.opts.bSlackDays : 2;
+    roomTier(c) {
+      if (c.grade[0] === 'B') return 2;
+      return c.roomScore >= 150 ? 0 : 1;
+    }
+
+    /**
+     * 일괄배정용 호기 선택. 방마스터 기준을 최대한 지킨다:
+     * - 1순위 방(단계 0) 호기를 먼저 모두 검토하고, 모자랄 때만 단계 1, 그래도 모자라면(allowBFill) B-2차후보로 보충
+     * - 같은 단계 안에서는 먼저 비는 호기 우선(동일부품 연속가공 1일 우대),
+     *   분산형이면 방(조)당 perGroup대까지 먼저 채우고 같은 방 안에서는 다른 담당작업자를 우선
+     * - C-조건부, 일정주의(지연), 완료확인 필요 호기는 자동선택하지 않는다.
+     */
+    batchPick(cands, count, perDays, from, partCode, allowBFill) {
+      const allowB = this.opts.allowB !== false && allowBFill !== false;
       const perGroup = this.opts.allocMode === 'fast' ? 0 : this.opts.perGroupMax != null ? this.opts.perGroupMax : 1;
-      const pool = [];
+      const tiers = [[], [], []];
       for (const c of cands) {
-        const g = c.grade[0];
-        if (g === 'C' || (g === 'B' && !allowB)) continue;
+        if (c.grade[0] === 'C') continue;
         if (opPriority(c.work) === 0 || String(c.availText).includes('완료확인 필요')) continue;
         const start = this.startFor(c.machine, from, perDays, partCode);
         if (start == null) continue;
-        const key = start + (g === 'B' ? slack : 0) - (c.sameCont ? 1 : 0);
-        pool.push({ c, key, group: this.groupOf[c.machine] });
+        tiers[this.roomTier(c)].push({ c, key: start - (c.sameCont ? 1 : 0), group: this.groupOf[c.machine], worker: this.workerByMachine[c.machine] || 'm' + c.machine });
       }
-      pool.sort((a, b) => a.key - b.key || b.c.score - a.c.score || a.c.rank - b.c.rank);
-      if (!perGroup) return pool.slice(0, count).map((p) => p.c);
-      // 같은 방(조)에 몰지 않는다: 방당 perGroup대까지 먼저 채우고, 모자라면 한도를 늘려 보충
       const picked = [];
-      const used = new Map();
-      for (let lim = perGroup; picked.length < count && lim <= count; lim++) {
-        for (const p of pool) {
-          if (picked.length >= count) break;
-          if (picked.includes(p)) continue;
-          if ((used.get(p.group) || 0) >= lim) continue;
-          picked.push(p);
-          used.set(p.group, (used.get(p.group) || 0) + 1);
+      const usedGroup = new Map();
+      const usedWorker = new Set();
+      const take = (p) => {
+        picked.push(p);
+        usedGroup.set(p.group, (usedGroup.get(p.group) || 0) + 1);
+        usedWorker.add(p.worker);
+      };
+      for (let t = 0; t < 3 && picked.length < count; t++) {
+        if (t === 2 && !allowB) break;
+        const pool = tiers[t].sort((a, b) => a.key - b.key || b.c.score - a.c.score || a.c.rank - b.c.rank);
+        if (!perGroup) {
+          for (const p of pool) if (picked.length < count) take(p);
+          continue;
+        }
+        for (let lim = perGroup; picked.length < count && lim <= count; lim++) {
+          for (const newWorkerOnly of [true, false]) {
+            for (const p of pool) {
+              if (picked.length >= count) break;
+              if (picked.includes(p) || (usedGroup.get(p.group) || 0) >= lim) continue;
+              if (newWorkerOnly && usedWorker.has(p.worker)) continue;
+              take(p);
+            }
+          }
         }
       }
       return picked.map((p) => p.c);
@@ -1217,7 +1239,7 @@
       const range = this._countRange(item, days);
       let best = null;
       for (let n = range.min; n <= range.max; n++) {
-        const combo = this.batchPick(cands, n, Math.ceil(days / n), from, item.partCode);
+        const combo = this.batchPick(cands, n, Math.ceil(days / n), from, item.partCode, n === range.min);
         if (!combo.length) break;
         const a = this.allocate(
           combo.map((c) => c.machine),
@@ -1290,6 +1312,102 @@
       return allocs;
     }
 
+    /**
+     * 담당자 조정: 가배정 1건의 호기/시작일/장비일/수량 변경.
+     * 다른 일정(확정·가배정·고장)과 겹치거나 완료확인 필요 호기면 거절. 반환 {ok, error}
+     */
+    updateDraft(id, change) {
+      const d = this.drafts.find((x) => x.id === id);
+      if (!d) return { ok: false, error: '가배정을 찾을 수 없습니다' };
+      const m = change.machine != null ? machineNo(change.machine) : d.machine;
+      if (!this.machineByNo[m]) return { ok: false, error: m + '호기는 설비마스터에 없습니다' };
+      const start = change.start != null ? change.start : d.start;
+      const days = Math.max(1, Math.round(change.days != null ? change.days : d.days));
+      const qty = change.qty != null ? Math.max(0, Math.round(change.qty)) : d.qty;
+      const end = start + days - 1;
+      if (start < this.today) return { ok: false, error: '시작일이 오늘보다 빠릅니다' };
+      if (this.timeline.status(m).delayed) return { ok: false, error: m + '호기는 완료확인 필요 상태입니다 (9번 시트 실적 입력 필요)' };
+      // 겹치는 뒤쪽 가배정은 pushNext면 길이를 유지한 채 뒤로 민다(확정·고장 일정은 움직이지 않음)
+      const moves = [];
+      let cursor = end;
+      const others = this.timeline
+        .segments(m)
+        .filter((seg) => seg.draftId !== id)
+        .sort((a, b) => a.s - b.s);
+      const fixed = others
+        .filter((seg) => seg.kind !== 'draft')
+        .map((seg) => ({ s: seg.s, e: seg.effEnd, label: seg.partCode + '(확정)' }))
+        .concat((this.timeline.blocks[m] || []).map((b) => ({ s: b.s, e: b.e, label: b.label })));
+      const hit = (a, b, list) => list.find((x) => x.s <= b && x.e >= a);
+      let c = hit(start, end, fixed);
+      if (c) return { ok: false, error: m + '호기 ' + fmtMD(c.s) + '~' + fmtMD(c.e) + ' ' + c.label + ' 일정과 겹칩니다' };
+      for (const seg of others) {
+        if (seg.kind !== 'draft' || seg.e < start) continue;
+        if (seg.s > cursor) break;
+        if (!change.pushNext) return { ok: false, error: m + '호기 ' + fmtMD(seg.s) + '~' + fmtMD(seg.e) + ' ' + seg.partCode + '(가배정) 일정과 겹칩니다 – [뒤 가배정 밀기]를 켜면 뒤로 밀 수 있습니다' };
+        const len = seg.e - seg.s;
+        const ns = cursor + 1;
+        c = hit(ns, ns + len, fixed);
+        if (c) return { ok: false, error: '밀려난 ' + seg.partCode + '가 ' + m + '호기 ' + fmtMD(c.s) + '~' + fmtMD(c.e) + ' ' + c.label + ' 일정과 겹칩니다' };
+        moves.push({ draftId: seg.draftId, s: ns, e: ns + len });
+        cursor = ns + len;
+      }
+      this.timeline.removeDrafts((seg) => seg.draftId === id);
+      Object.assign(d, { machine: m, start, end, days, qty });
+      this.timeline.addDraft(m, start, end, { draftId: d.id, itemKey: d.itemKey, partCode: d.partCode, productCode: d.productCode, planNo: d.planNo, material: d.material, qty });
+      const touched = new Set();
+      for (const mv of moves) {
+        const od = this.drafts.find((x) => x.id === mv.draftId);
+        const seg = this.timeline.segments(m).find((x) => x.draftId === mv.draftId);
+        od.start = seg.s = mv.s;
+        od.end = seg.e = seg.effEnd = mv.e;
+        touched.add(od.itemKey);
+      }
+      this.timeline.segments(m).sort((a, b) => a.s - b.s || a.e - b.e);
+      for (const k of touched) if (k !== d.itemKey) this._refreshResult(k);
+      this._markManual(d.itemKey);
+      this._rebuildSetupCount();
+      return { ok: true, pushed: moves.length };
+    }
+    /** 품목의 가배정을 담당자 조정분으로 고정(자동 재계산 시 유지)하고 결과를 다시 계산. */
+    _markManual(key) {
+      for (const x of this.drafts)
+        if (x.itemKey === key) {
+          x.auto = false;
+          x.manual = true;
+        }
+      for (const segs of this.timeline.byMachine.values()) for (const seg of segs) if (seg.itemKey === key) seg.auto = false;
+      this._refreshResult(key, '수기가배정');
+    }
+    _refreshResult(key, decision) {
+      const item = this.itemByKey[key];
+      const ds = this.drafts.filter((x) => x.itemKey === key);
+      const prev = this.results[key] || {};
+      if (!ds.length) {
+        delete this.results[key];
+        return;
+      }
+      const finish = Math.max(...ds.map((x) => x.end));
+      const late = item && item.due != null && finish > item.due ? finish - item.due : 0;
+      this.results[key] = {
+        decision: decision || prev.decision || '가배정',
+        reason: late > 0 ? '예상완료 ' + fmtMD(finish) + ' (요청일 +' + late + '일)' : '',
+        finish,
+        late,
+        lateAck: late > 0 && prev.lateAck && prev.ackFinish === finish ? true : false,
+        ackFinish: prev.ackFinish,
+        machines: ds.map((x) => x.machine),
+      };
+    }
+    /** 납기초과를 담당자가 확인함(목록에서 '지연확인'으로 분리). 일정이 바뀌면 다시 확인 필요. */
+    ackLate(key, on) {
+      const r = this.results[key];
+      if (!r || !(r.late > 0)) return false;
+      r.lateAck = !!on;
+      r.ackFinish = on ? r.finish : null;
+      return true;
+    }
+
     itemState(item) {
       const r = this.results[item.key];
       const dq = this.draftQty(item.key);
@@ -1299,7 +1417,8 @@
       if (dq > 0) {
         const left = this.workQty(item);
         if (left > 0) return { label: '일부가배정', cls: 'warn' };
-        return r && r.late > 0 ? { label: '가배정(지연)', cls: 'late' } : { label: '가배정', cls: 'draft' };
+        if (r && r.late > 0) return r.lateAck ? { label: '지연확인', cls: 'warn' } : { label: '가배정(지연)', cls: 'late' };
+        return { label: '가배정', cls: 'draft' };
       }
       if (r && r.decision === '수기검토') return { label: '수기검토', cls: 'review' };
       if (item.status === '추가배정') return { label: '추가배정', cls: 'warn' };
@@ -1307,7 +1426,7 @@
     }
 
     summary() {
-      const s = { items: 0, done: 0, draft: 0, late: 0, review: 0, todo: 0, drafts: this.drafts.length, machines: new Set(this.drafts.map((d) => d.machine)).size };
+      const s = { items: 0, done: 0, draft: 0, late: 0, lateAck: 0, review: 0, todo: 0, drafts: this.drafts.length, machines: new Set(this.drafts.map((d) => d.machine)).size };
       for (const it of this.items) {
         if (it.dupOf != null) continue;
         s.items++;
@@ -1317,6 +1436,9 @@
         else if (st === '가배정(지연)') {
           s.draft++;
           s.late++;
+        } else if (st === '지연확인') {
+          s.draft++;
+          s.lateAck++;
         } else if (st === '수기검토') s.review++;
         else s.todo++;
       }
