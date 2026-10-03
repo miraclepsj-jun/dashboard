@@ -186,6 +186,7 @@
       teOk: col(hm, 'TE가공가능'),
       newSetupOk: col(hm, '신규셋팅가능', '신규세팅가능'),
       memo: col(hm, '비고'),
+      group: col(hm, '조', '작업조', '담당조', '반'),
     };
     return rows
       .slice(hm.start)
@@ -249,7 +250,7 @@
   function readWorkers(rows) {
     const hm = headerMap(rows, '호기');
     if (!hm) return [];
-    const c = { machine: col(hm, '호기'), worker: col(hm, '담당작업자'), room: col(hm, '방'), status: col(hm, '상태구분'), start: col(hm, '시작일'), end: col(hm, '종료일'), noSetup: col(hm, '신규세팅금지'), note: col(hm, '비고') };
+    const c = { machine: col(hm, '호기'), worker: col(hm, '담당작업자'), room: col(hm, '방'), status: col(hm, '상태구분'), start: col(hm, '시작일'), end: col(hm, '종료일'), noSetup: col(hm, '신규세팅금지'), note: col(hm, '비고'), group: col(hm, '조', '작업조', '담당조', '반') };
     return rows
       .slice(hm.start)
       .filter((r) => r && str(at(r, c.machine)))
@@ -262,6 +263,7 @@
         end: toSerial(at(r, c.end)),
         noSetup: str(at(r, c.noSetup)),
         note: str(at(r, c.note)),
+        group: str(at(r, c.group)),
       }));
   }
 
@@ -437,7 +439,7 @@
       for (let d = 0; d < days; d++) {
         const day = from + d;
         const hit = segs.find((s) => s.s <= day && s.e >= day);
-        row.push(hit ? (hit.s === day || d === 0 ? (hit.kind === 'draft' ? '▶' : '') + hit.productCode : '■') : null);
+        row.push(hit ? (hit.s === day || d === 0 ? (hit.kind === 'draft' ? '▶' : '') + hit.partCode : '■') : null);
       }
       g.push(row);
     }

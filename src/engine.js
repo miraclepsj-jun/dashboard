@@ -702,6 +702,7 @@
           (this.machinesByWorker[str(w.worker)] = this.machinesByWorker[str(w.worker)] || []).push(m);
         }
       }
+      this._buildGroups(model);
       // 확정행의 재질(동일부품 연속가공 판단용)은 원본 품목에서 찾는다.
       const confirmed = (model.confirmed || []).map((c) => {
         const it = this.itemByKey[itemKey(c.planNo, c.productCode, c.partCode)];
@@ -713,9 +714,71 @@
         delayPolicy: opts.delayPolicy,
         blocks: buildBlocks(model.workers, opts.hardBlockKeywords),
       });
+      this._rebuildSetupCount();
       this.drafts = []; // {id, itemKey, machine, start, end, days, qty, auto, note}
       this._draftSeq = 1;
       this.results = {}; // itemKey -> {decision, reason, ...}
+    }
+
+    /**
+     * 조(작업 그룹) 구성. 우선순위:
+     * 1) 설비마스터/작업자운영마스터의 '조' 열  2) 담당작업자(한 작업자가 여러 호기를 맡는 경우)
+     * 3) 방 안에서 호기번호 순 N대(groupSize) 단위 묶음
+     */
+    _buildGroups(model) {
+      const mode = this.opts.groupMode || 'auto';
+      const size = Math.max(1, this.opts.groupSize || 10);
+      this.groupOf = {};
+      const fromCol = {};
+      for (const m of this.machines) if (str(m.group)) fromCol[m.no] = str(m.group);
+      for (const w of model.workers || []) {
+        const m = machineNo(w.machine);
+        if (m && str(w.group) && !fromCol[m]) fromCol[m] = str(w.group);
+      }
+      const workerShared = Object.values(this.machinesByWorker).some((l) => l.length > 1);
+      let source = 'block';
+      if ((mode === 'auto' || mode === 'column') && Object.keys(fromCol).length) source = 'column';
+      else if ((mode === 'auto' || mode === 'worker') && workerShared) source = 'worker';
+      const byRoom = {};
+      for (const m of this.machines) (byRoom[m.room] = byRoom[m.room] || []).push(m.no);
+      for (const [room, list] of Object.entries(byRoom)) {
+        list.sort((a, b) => Number(a) - Number(b));
+        list.forEach((no, i) => {
+          let g = null;
+          if (source === 'column') g = fromCol[no] ? '조 ' + fromCol[no] : null;
+          else if (source === 'worker') g = this.workerByMachine[no] ? '작업자 ' + this.workerByMachine[no] : null;
+          this.groupOf[no] = g || room + ' ' + (Math.floor(i / size) + 1) + '조';
+        });
+      }
+      this.groupSource = source;
+    }
+    _isContinuation(m, start, partCode) {
+      const prev = this.timeline.prevSegmentEndingAt(m, start - 1);
+      return !!(prev && partCode && up(prev.partCode) === up(partCode));
+    }
+    _rebuildSetupCount() {
+      this.setupCount = new Map();
+      for (const [m, segs] of this.timeline.byMachine) for (const seg of segs) this._countSetup(m, seg.s, seg.partCode, 1);
+    }
+    _countSetup(m, day, partCode, delta) {
+      if (this._isContinuation(m, day, partCode)) return;
+      const k = this.groupOf[m] + '|' + day;
+      this.setupCount.set(k, (this.setupCount.get(k) || 0) + delta);
+    }
+    setupsOn(m, day) {
+      return this.setupCount.get(this.groupOf[m] + '|' + day) || 0;
+    }
+    /** 빈 구간 + 조별 하루 신규셋팅 한도를 함께 만족하는 시작일. */
+    startFor(m, from, days, partCode) {
+      const tl = this.timeline;
+      let s = tl.gapStart(m, from, days);
+      const limit = this.opts.setupLimitPerGroupDay || 0;
+      if (!limit || s == null) return s;
+      for (let guard = 0; guard < 90 && s != null; guard++) {
+        if (this._isContinuation(m, s, partCode) || this.setupsOn(m, s) < limit) return s;
+        s = tl.gapStart(m, s + 1, days);
+      }
+      return s;
     }
 
     // 품목별 기존확정 + 가배정 수량
@@ -953,12 +1016,11 @@
      * 선택 호기에 장비일수/수량 배분 (AllocationPreviewV561 + DistributeQtyHundredsV569).
      * 반환: [{machine, start, end, days, qty}] 또는 null
      */
-    allocate(machines, totalQty, totalDays, from) {
+    allocate(machines, totalQty, totalDays, from, partCode) {
       from = from != null ? from : this.baseDate;
       const ms = machines.map(machineNo).filter(Boolean);
       if (!ms.length || !(totalQty > 0) || !(totalDays > 0)) return null;
-      const tl = this.timeline;
-      const start = ms.map((m) => tl.gapStart(m, from, 1));
+      const start = ms.map((m) => this.startFor(m, from, 1, partCode));
       const valid = start.map((s) => s != null);
       const days = ms.map(() => 0);
       const spread = () => {
@@ -983,7 +1045,7 @@
         let fit = true;
         for (let i = 0; i < ms.length; i++) {
           if (!valid[i] || days[i] <= 0) continue;
-          const g = tl.gapStart(ms[i], from, days[i]);
+          const g = this.startFor(ms[i], from, days[i], partCode);
           if (g == null) {
             valid[i] = false;
             fit = false;
@@ -998,7 +1060,7 @@
       spread();
       for (let i = 0; i < ms.length; i++) {
         if (!valid[i] || days[i] <= 0) continue;
-        const g = tl.gapStart(ms[i], from, days[i]);
+        const g = this.startFor(ms[i], from, days[i], partCode);
         if (g == null) return null;
         start[i] = g;
       }
@@ -1043,6 +1105,7 @@
           qty: d.qty,
           auto: d.auto,
         });
+        this._countSetup(d.machine, d.start, d.partCode, 1);
         added.push(d);
       }
       return added;
@@ -1050,18 +1113,21 @@
     removeDraftsForItem(key) {
       this.drafts = this.drafts.filter((d) => d.itemKey !== key);
       this.timeline.removeDrafts((seg) => seg.itemKey === key);
+      this._rebuildSetupCount();
       delete this.results[key];
     }
     removeDraft(id) {
       const d = this.drafts.find((x) => x.id === id);
       this.drafts = this.drafts.filter((x) => x.id !== id);
       this.timeline.removeDrafts((seg) => seg.draftId === id);
+      this._rebuildSetupCount();
       return d;
     }
     clearAutoDrafts() {
       const keys = new Set(this.drafts.filter((d) => d.auto).map((d) => d.itemKey));
       this.drafts = this.drafts.filter((d) => !d.auto);
       this.timeline.removeDrafts((seg) => seg.auto);
+      this._rebuildSetupCount();
       for (const k of keys) delete this.results[k];
       for (const k of Object.keys(this.results)) if (this.results[k].decision !== '수기가배정') delete this.results[k];
     }
@@ -1080,16 +1146,29 @@
       });
     }
 
-    /** 장비 대수 결정: 추천범위 하한부터, 납기를 못 맞추면 상한까지 확장. */
+    /**
+     * 장비 대수 결정.
+     * - 분산형(기본, 현장방식): 가공기간을 요청일까지 늘려 최소 대수로 편성.
+     *   목표기간 T = 요청일까지 일수를 [최소 가공기간, 최대 가공기간]으로 자른 값, 대수 = 올림(장비일수 / T).
+     *   요청일이 최소 가공기간 이상 남은 경우에만, 늦어지면 한 대씩 늘린다 (이미 늦은 품목에 호기를 몰지 않음).
+     * - 집중형: 기존 권장대수(1/2/2~3/3~5) 하한부터, 늦으면 상한까지 확장.
+     */
     _countRange(item, days) {
-      const maxMachines = this.opts.maxMachines || 10;
-      const rec = parseRecRange(recommendMachineRange(days));
-      if (rec) return { min: rec.min, max: Math.min(this.opts.expandToDue === false ? rec.min : rec.max, maxMachines) };
-      // Manual Review (장비일수 40일 초과): 납기 내 완료에 필요한 최소 대수, 3~maxMachines
-      const avail = Math.max(1, item.availDays);
-      const need = Math.ceil(days / avail);
-      const n = Math.min(Math.max(need, 3), maxMachines);
-      return { min: n, max: this.opts.expandToDue === false ? n : Math.max(n, Math.min(maxMachines, n + 2)) };
+      const maxMachines = this.opts.maxMachines || 6;
+      if (this.opts.allocMode === 'fast') {
+        const rec = parseRecRange(recommendMachineRange(days));
+        if (rec) return { min: rec.min, max: Math.min(this.opts.expandToDue === false ? rec.min : rec.max, maxMachines) };
+        const need = Math.ceil(days / Math.max(1, item.availDays));
+        const n = Math.min(Math.max(need, 3), maxMachines);
+        return { min: n, max: this.opts.expandToDue === false ? n : Math.max(n, Math.min(maxMachines, n + 2)) };
+      }
+      const minRun = Math.max(1, this.opts.minRunDays || 7);
+      const maxRun = Math.max(minRun, this.opts.maxRunDays || 30);
+      const toDue = item.due != null ? item.due - this.baseDate + 1 : null;
+      const target = Math.min(Math.max(toDue == null ? maxRun : toDue, minRun), maxRun);
+      const n = Math.min(Math.max(1, Math.ceil(days / target)), maxMachines);
+      const canExpand = this.opts.expandToDue !== false && toDue != null && toDue >= minRun;
+      return { min: n, max: canExpand ? maxMachines : n };
     }
 
     /**
@@ -1097,21 +1176,35 @@
      * B-2차후보는 bSlackDays 만큼 늦게 비는 것으로 간주(=A 우선), 동일부품 연속가공은 1일 우대.
      * C-조건부, 일정주의(지연), 완료확인 필요 호기는 자동선택하지 않는다.
      */
-    batchPick(cands, count, perDays, from) {
+    batchPick(cands, count, perDays, from, partCode) {
       const allowB = this.opts.allowB !== false;
       const slack = this.opts.bSlackDays != null ? this.opts.bSlackDays : 2;
+      const perGroup = this.opts.allocMode === 'fast' ? 0 : this.opts.perGroupMax != null ? this.opts.perGroupMax : 1;
       const pool = [];
       for (const c of cands) {
         const g = c.grade[0];
         if (g === 'C' || (g === 'B' && !allowB)) continue;
         if (opPriority(c.work) === 0 || String(c.availText).includes('완료확인 필요')) continue;
-        const start = this.timeline.gapStart(c.machine, from, perDays);
+        const start = this.startFor(c.machine, from, perDays, partCode);
         if (start == null) continue;
         const key = start + (g === 'B' ? slack : 0) - (c.sameCont ? 1 : 0);
-        pool.push({ c, key });
+        pool.push({ c, key, group: this.groupOf[c.machine] });
       }
       pool.sort((a, b) => a.key - b.key || b.c.score - a.c.score || a.c.rank - b.c.rank);
-      return pool.slice(0, count).map((p) => p.c);
+      if (!perGroup) return pool.slice(0, count).map((p) => p.c);
+      // 같은 조에 몰지 않는다: 조당 perGroup대까지 먼저 채우고, 모자라면 한도를 늘려 보충
+      const picked = [];
+      const used = new Map();
+      for (let lim = perGroup; picked.length < count && lim <= count; lim++) {
+        for (const p of pool) {
+          if (picked.length >= count) break;
+          if (picked.includes(p)) continue;
+          if ((used.get(p.group) || 0) >= lim) continue;
+          picked.push(p);
+          used.set(p.group, (used.get(p.group) || 0) + 1);
+        }
+      }
+      return picked.map((p) => p.c);
     }
 
     /** 품목 1건 자동 가배정 시도. */
@@ -1128,13 +1221,14 @@
       const range = this._countRange(item, days);
       let best = null;
       for (let n = range.min; n <= range.max; n++) {
-        const combo = this.batchPick(cands, n, Math.ceil(days / n), from);
+        const combo = this.batchPick(cands, n, Math.ceil(days / n), from, item.partCode);
         if (!combo.length) break;
         const a = this.allocate(
           combo.map((c) => c.machine),
           qty,
           days,
-          from
+          from,
+          item.partCode
         );
         if (!a) continue;
         const finish = Math.max(...a.map((x) => x.end));
@@ -1185,7 +1279,7 @@
     manualAssign(item, machines, opts) {
       const qty = opts && opts.qty > 0 ? Math.min(opts.qty, this.workQty(item) || opts.qty) : this.workQty(item);
       const days = opts && opts.days > 0 ? opts.days : daysForQty(item, qty) || 1;
-      const allocs = this.allocate(machines, qty, days, opts && opts.from);
+      const allocs = this.allocate(machines, qty, days, opts && opts.from, item.partCode);
       if (!allocs) return null;
       this.addDrafts(item, allocs, { auto: false, manual: true });
       const finish = Math.max(...allocs.map((x) => x.end));

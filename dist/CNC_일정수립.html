@@ -208,19 +208,22 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .g-row .we { position: absolute; top: 0; bottom: 0; width: var(--day); background: var(--weekend); }
 .g-row .todayline { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--today); opacity: 0.55; }
 .bar { position: absolute; top: 3px; height: calc(var(--row) - 7px); border-radius: 4px; font-size: 11px; line-height: calc(var(--row) - 7px); padding: 0 5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; color: #fff; border: 1px solid transparent; }
-.bar.confirmed { background: var(--confirmed); }
-.bar.confirmed.done { opacity: 0.55; }
-.bar.draft { background: var(--draft); color: #1d1405; }
-.bar.draft.late { background: var(--late); color: #fff; }
-.bar.draft.manual { box-shadow: inset 0 0 0 2px rgba(0,0,0,0.25); }
+.bar { background: var(--pc, var(--confirmed)); color: var(--pt, #fff); }
+.bar.confirmed { border-color: rgba(0, 0, 0, 0.35); }
+.bar.confirmed.done { opacity: 0.5; }
+.bar.draft { background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.38) 0 5px, transparent 5px 10px); border: 1px dashed rgba(0, 0, 0, 0.55); }
+.bar.draft.late { box-shadow: inset 0 0 0 2px var(--late); }
+.bar.draft.manual { border-style: solid; border-width: 2px; }
 .bar.block { background: repeating-linear-gradient(45deg, var(--block) 0 4px, transparent 4px 8px); color: var(--ink); cursor: default; border-color: var(--block); }
 .bar.sel { outline: 2px solid var(--ink); outline-offset: 1px; }
+.bar.hl { outline: 2px solid var(--ink); }
+.bar.dim { opacity: 0.25; }
 .bar.delayflag { background: transparent; border: 1px dashed var(--late); color: var(--late); cursor: default; }
 .legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--muted); }
 .lg { display: inline-block; width: 14px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
-.lg.confirmed { background: var(--confirmed); }
-.lg.draft { background: var(--draft); }
-.lg.late { background: var(--late); }
+.lg.confirmed { background: var(--confirmed); border: 1px solid rgba(0,0,0,0.35); }
+.lg.draft { background: var(--confirmed) repeating-linear-gradient(135deg, rgba(255,255,255,0.45) 0 3px, transparent 3px 6px); border: 1px dashed rgba(0,0,0,0.55); }
+.lg.late { box-shadow: inset 0 0 0 2px var(--late); }
 .lg.block { background: repeating-linear-gradient(45deg, var(--block) 0 3px, transparent 3px 6px); border: 1px solid var(--block); }
 .lg.delay { border: 1px dashed var(--late); }
 
@@ -307,7 +310,7 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   <section class="flow" aria-label="작업 순서">
     <ol>
       <li><b>불러오기</b> 통합문서(.xlsm) 또는 일정관리 프로그램 복사분 붙여넣기</li>
-      <li><b>자동 일정수립</b> 미배정 전 품목을 납기순으로 가배정</li>
+      <li><b>자동 일정수립</b> 납기순으로 적은 호기에 길게, 조별로 분산 가배정</li>
       <li><b>검토·수정</b> 간트/품목에서 호기 변경, 수기검토 품목 배정</li>
       <li><b>내보내기</b> 9번 확정시트 붙여넣기용 + 설비1~A 입력요약</li>
     </ol>
@@ -353,7 +356,7 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
         <input type="search" id="ganttSearch" placeholder="호기 번호 또는 부품코드" aria-label="간트 검색">
         <label class="check"><input type="checkbox" id="ganttBusy" checked> 일정 있는 호기만</label>
         <span class="spacer"></span>
-        <span class="legend"><i class="lg confirmed"></i>확정 <i class="lg draft"></i>가배정 <i class="lg late"></i>납기초과 <i class="lg block"></i>고장/휴 <i class="lg delay"></i>완료확인 필요</span>
+        <span class="legend">막대 색 = 부품코드(같은 부품 같은 색) · <i class="lg confirmed"></i>확정 <i class="lg draft"></i>가배정 <i class="lg late"></i>납기초과 <i class="lg block"></i>고장/휴 <i class="lg delay"></i>완료확인 필요</span>
       </div>
       <div class="gantt" id="gantt" tabindex="0" aria-label="호기별 간트차트">
         <div class="gantt-head" id="ganttHead"></div>
@@ -401,8 +404,22 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
     <div class="form-grid">
       <label for="setBase">기준게시일 (배정 시작 가능일)</label>
       <input type="date" id="setBase">
+      <label for="setMode">배정 방식</label>
+      <select id="setMode"><option value="spread">분산형 – 기간을 늘려 적은 호기, 조별 분산 (현장방식)</option><option value="fast">집중형 – 권장대수로 최단 완료</option></select>
+      <label for="setMinRun">최소 가공기간 (일)</label>
+      <input type="number" id="setMinRun" min="1" max="60" value="7">
+      <label for="setMaxRun">최대 가공기간 (일)</label>
+      <input type="number" id="setMaxRun" min="1" max="120" value="30">
       <label for="setMax">품목당 최대 호기 수</label>
-      <input type="number" id="setMax" min="1" max="30" value="10">
+      <input type="number" id="setMax" min="1" max="30" value="6">
+      <label for="setGroupMode">조 구성 기준</label>
+      <select id="setGroupMode"><option value="auto">자동 (조 열 → 담당작업자 → 호기번호 묶음)</option><option value="column">설비/작업자 마스터의 '조' 열</option><option value="worker">담당작업자</option><option value="block">방별 호기번호 순 N대 묶음</option></select>
+      <label for="setGroupSize">묶음 단위 호기 수 (N)</label>
+      <input type="number" id="setGroupSize" min="1" max="50" value="10">
+      <label for="setPerGroup">한 품목이 한 조에 쓰는 호기 수</label>
+      <input type="number" id="setPerGroup" min="1" max="10" value="1">
+      <label for="setSetupLimit">조별 하루 신규셋팅 한도 (0=제한 없음)</label>
+      <input type="number" id="setSetupLimit" min="0" max="20" value="2">
       <label for="setAllowB">B-2차후보 자동선택</label>
       <select id="setAllowB"><option value="1">허용 (A후보가 늦게 비면 사용)</option><option value="0">A후보만</option></select>
       <label for="setSlack">B후보 불이익 (일)</label>
@@ -1154,6 +1171,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           (this.machinesByWorker[str(w.worker)] = this.machinesByWorker[str(w.worker)] || []).push(m);
         }
       }
+      this._buildGroups(model);
       // 확정행의 재질(동일부품 연속가공 판단용)은 원본 품목에서 찾는다.
       const confirmed = (model.confirmed || []).map((c) => {
         const it = this.itemByKey[itemKey(c.planNo, c.productCode, c.partCode)];
@@ -1165,9 +1183,71 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         delayPolicy: opts.delayPolicy,
         blocks: buildBlocks(model.workers, opts.hardBlockKeywords),
       });
+      this._rebuildSetupCount();
       this.drafts = []; // {id, itemKey, machine, start, end, days, qty, auto, note}
       this._draftSeq = 1;
       this.results = {}; // itemKey -> {decision, reason, ...}
+    }
+
+    /**
+     * 조(작업 그룹) 구성. 우선순위:
+     * 1) 설비마스터/작업자운영마스터의 '조' 열  2) 담당작업자(한 작업자가 여러 호기를 맡는 경우)
+     * 3) 방 안에서 호기번호 순 N대(groupSize) 단위 묶음
+     */
+    _buildGroups(model) {
+      const mode = this.opts.groupMode || 'auto';
+      const size = Math.max(1, this.opts.groupSize || 10);
+      this.groupOf = {};
+      const fromCol = {};
+      for (const m of this.machines) if (str(m.group)) fromCol[m.no] = str(m.group);
+      for (const w of model.workers || []) {
+        const m = machineNo(w.machine);
+        if (m && str(w.group) && !fromCol[m]) fromCol[m] = str(w.group);
+      }
+      const workerShared = Object.values(this.machinesByWorker).some((l) => l.length > 1);
+      let source = 'block';
+      if ((mode === 'auto' || mode === 'column') && Object.keys(fromCol).length) source = 'column';
+      else if ((mode === 'auto' || mode === 'worker') && workerShared) source = 'worker';
+      const byRoom = {};
+      for (const m of this.machines) (byRoom[m.room] = byRoom[m.room] || []).push(m.no);
+      for (const [room, list] of Object.entries(byRoom)) {
+        list.sort((a, b) => Number(a) - Number(b));
+        list.forEach((no, i) => {
+          let g = null;
+          if (source === 'column') g = fromCol[no] ? '조 ' + fromCol[no] : null;
+          else if (source === 'worker') g = this.workerByMachine[no] ? '작업자 ' + this.workerByMachine[no] : null;
+          this.groupOf[no] = g || room + ' ' + (Math.floor(i / size) + 1) + '조';
+        });
+      }
+      this.groupSource = source;
+    }
+    _isContinuation(m, start, partCode) {
+      const prev = this.timeline.prevSegmentEndingAt(m, start - 1);
+      return !!(prev && partCode && up(prev.partCode) === up(partCode));
+    }
+    _rebuildSetupCount() {
+      this.setupCount = new Map();
+      for (const [m, segs] of this.timeline.byMachine) for (const seg of segs) this._countSetup(m, seg.s, seg.partCode, 1);
+    }
+    _countSetup(m, day, partCode, delta) {
+      if (this._isContinuation(m, day, partCode)) return;
+      const k = this.groupOf[m] + '|' + day;
+      this.setupCount.set(k, (this.setupCount.get(k) || 0) + delta);
+    }
+    setupsOn(m, day) {
+      return this.setupCount.get(this.groupOf[m] + '|' + day) || 0;
+    }
+    /** 빈 구간 + 조별 하루 신규셋팅 한도를 함께 만족하는 시작일. */
+    startFor(m, from, days, partCode) {
+      const tl = this.timeline;
+      let s = tl.gapStart(m, from, days);
+      const limit = this.opts.setupLimitPerGroupDay || 0;
+      if (!limit || s == null) return s;
+      for (let guard = 0; guard < 90 && s != null; guard++) {
+        if (this._isContinuation(m, s, partCode) || this.setupsOn(m, s) < limit) return s;
+        s = tl.gapStart(m, s + 1, days);
+      }
+      return s;
     }
 
     // 품목별 기존확정 + 가배정 수량
@@ -1405,12 +1485,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
      * 선택 호기에 장비일수/수량 배분 (AllocationPreviewV561 + DistributeQtyHundredsV569).
      * 반환: [{machine, start, end, days, qty}] 또는 null
      */
-    allocate(machines, totalQty, totalDays, from) {
+    allocate(machines, totalQty, totalDays, from, partCode) {
       from = from != null ? from : this.baseDate;
       const ms = machines.map(machineNo).filter(Boolean);
       if (!ms.length || !(totalQty > 0) || !(totalDays > 0)) return null;
-      const tl = this.timeline;
-      const start = ms.map((m) => tl.gapStart(m, from, 1));
+      const start = ms.map((m) => this.startFor(m, from, 1, partCode));
       const valid = start.map((s) => s != null);
       const days = ms.map(() => 0);
       const spread = () => {
@@ -1435,7 +1514,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         let fit = true;
         for (let i = 0; i < ms.length; i++) {
           if (!valid[i] || days[i] <= 0) continue;
-          const g = tl.gapStart(ms[i], from, days[i]);
+          const g = this.startFor(ms[i], from, days[i], partCode);
           if (g == null) {
             valid[i] = false;
             fit = false;
@@ -1450,7 +1529,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       spread();
       for (let i = 0; i < ms.length; i++) {
         if (!valid[i] || days[i] <= 0) continue;
-        const g = tl.gapStart(ms[i], from, days[i]);
+        const g = this.startFor(ms[i], from, days[i], partCode);
         if (g == null) return null;
         start[i] = g;
       }
@@ -1495,6 +1574,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           qty: d.qty,
           auto: d.auto,
         });
+        this._countSetup(d.machine, d.start, d.partCode, 1);
         added.push(d);
       }
       return added;
@@ -1502,18 +1582,21 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     removeDraftsForItem(key) {
       this.drafts = this.drafts.filter((d) => d.itemKey !== key);
       this.timeline.removeDrafts((seg) => seg.itemKey === key);
+      this._rebuildSetupCount();
       delete this.results[key];
     }
     removeDraft(id) {
       const d = this.drafts.find((x) => x.id === id);
       this.drafts = this.drafts.filter((x) => x.id !== id);
       this.timeline.removeDrafts((seg) => seg.draftId === id);
+      this._rebuildSetupCount();
       return d;
     }
     clearAutoDrafts() {
       const keys = new Set(this.drafts.filter((d) => d.auto).map((d) => d.itemKey));
       this.drafts = this.drafts.filter((d) => !d.auto);
       this.timeline.removeDrafts((seg) => seg.auto);
+      this._rebuildSetupCount();
       for (const k of keys) delete this.results[k];
       for (const k of Object.keys(this.results)) if (this.results[k].decision !== '수기가배정') delete this.results[k];
     }
@@ -1532,16 +1615,29 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       });
     }
 
-    /** 장비 대수 결정: 추천범위 하한부터, 납기를 못 맞추면 상한까지 확장. */
+    /**
+     * 장비 대수 결정.
+     * - 분산형(기본, 현장방식): 가공기간을 요청일까지 늘려 최소 대수로 편성.
+     *   목표기간 T = 요청일까지 일수를 [최소 가공기간, 최대 가공기간]으로 자른 값, 대수 = 올림(장비일수 / T).
+     *   요청일이 최소 가공기간 이상 남은 경우에만, 늦어지면 한 대씩 늘린다 (이미 늦은 품목에 호기를 몰지 않음).
+     * - 집중형: 기존 권장대수(1/2/2~3/3~5) 하한부터, 늦으면 상한까지 확장.
+     */
     _countRange(item, days) {
-      const maxMachines = this.opts.maxMachines || 10;
-      const rec = parseRecRange(recommendMachineRange(days));
-      if (rec) return { min: rec.min, max: Math.min(this.opts.expandToDue === false ? rec.min : rec.max, maxMachines) };
-      // Manual Review (장비일수 40일 초과): 납기 내 완료에 필요한 최소 대수, 3~maxMachines
-      const avail = Math.max(1, item.availDays);
-      const need = Math.ceil(days / avail);
-      const n = Math.min(Math.max(need, 3), maxMachines);
-      return { min: n, max: this.opts.expandToDue === false ? n : Math.max(n, Math.min(maxMachines, n + 2)) };
+      const maxMachines = this.opts.maxMachines || 6;
+      if (this.opts.allocMode === 'fast') {
+        const rec = parseRecRange(recommendMachineRange(days));
+        if (rec) return { min: rec.min, max: Math.min(this.opts.expandToDue === false ? rec.min : rec.max, maxMachines) };
+        const need = Math.ceil(days / Math.max(1, item.availDays));
+        const n = Math.min(Math.max(need, 3), maxMachines);
+        return { min: n, max: this.opts.expandToDue === false ? n : Math.max(n, Math.min(maxMachines, n + 2)) };
+      }
+      const minRun = Math.max(1, this.opts.minRunDays || 7);
+      const maxRun = Math.max(minRun, this.opts.maxRunDays || 30);
+      const toDue = item.due != null ? item.due - this.baseDate + 1 : null;
+      const target = Math.min(Math.max(toDue == null ? maxRun : toDue, minRun), maxRun);
+      const n = Math.min(Math.max(1, Math.ceil(days / target)), maxMachines);
+      const canExpand = this.opts.expandToDue !== false && toDue != null && toDue >= minRun;
+      return { min: n, max: canExpand ? maxMachines : n };
     }
 
     /**
@@ -1549,21 +1645,35 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
      * B-2차후보는 bSlackDays 만큼 늦게 비는 것으로 간주(=A 우선), 동일부품 연속가공은 1일 우대.
      * C-조건부, 일정주의(지연), 완료확인 필요 호기는 자동선택하지 않는다.
      */
-    batchPick(cands, count, perDays, from) {
+    batchPick(cands, count, perDays, from, partCode) {
       const allowB = this.opts.allowB !== false;
       const slack = this.opts.bSlackDays != null ? this.opts.bSlackDays : 2;
+      const perGroup = this.opts.allocMode === 'fast' ? 0 : this.opts.perGroupMax != null ? this.opts.perGroupMax : 1;
       const pool = [];
       for (const c of cands) {
         const g = c.grade[0];
         if (g === 'C' || (g === 'B' && !allowB)) continue;
         if (opPriority(c.work) === 0 || String(c.availText).includes('완료확인 필요')) continue;
-        const start = this.timeline.gapStart(c.machine, from, perDays);
+        const start = this.startFor(c.machine, from, perDays, partCode);
         if (start == null) continue;
         const key = start + (g === 'B' ? slack : 0) - (c.sameCont ? 1 : 0);
-        pool.push({ c, key });
+        pool.push({ c, key, group: this.groupOf[c.machine] });
       }
       pool.sort((a, b) => a.key - b.key || b.c.score - a.c.score || a.c.rank - b.c.rank);
-      return pool.slice(0, count).map((p) => p.c);
+      if (!perGroup) return pool.slice(0, count).map((p) => p.c);
+      // 같은 조에 몰지 않는다: 조당 perGroup대까지 먼저 채우고, 모자라면 한도를 늘려 보충
+      const picked = [];
+      const used = new Map();
+      for (let lim = perGroup; picked.length < count && lim <= count; lim++) {
+        for (const p of pool) {
+          if (picked.length >= count) break;
+          if (picked.includes(p)) continue;
+          if ((used.get(p.group) || 0) >= lim) continue;
+          picked.push(p);
+          used.set(p.group, (used.get(p.group) || 0) + 1);
+        }
+      }
+      return picked.map((p) => p.c);
     }
 
     /** 품목 1건 자동 가배정 시도. */
@@ -1580,13 +1690,14 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const range = this._countRange(item, days);
       let best = null;
       for (let n = range.min; n <= range.max; n++) {
-        const combo = this.batchPick(cands, n, Math.ceil(days / n), from);
+        const combo = this.batchPick(cands, n, Math.ceil(days / n), from, item.partCode);
         if (!combo.length) break;
         const a = this.allocate(
           combo.map((c) => c.machine),
           qty,
           days,
-          from
+          from,
+          item.partCode
         );
         if (!a) continue;
         const finish = Math.max(...a.map((x) => x.end));
@@ -1637,7 +1748,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     manualAssign(item, machines, opts) {
       const qty = opts && opts.qty > 0 ? Math.min(opts.qty, this.workQty(item) || opts.qty) : this.workQty(item);
       const days = opts && opts.days > 0 ? opts.days : daysForQty(item, qty) || 1;
-      const allocs = this.allocate(machines, qty, days, opts && opts.from);
+      const allocs = this.allocate(machines, qty, days, opts && opts.from, item.partCode);
       if (!allocs) return null;
       this.addDrafts(item, allocs, { auto: false, manual: true });
       const finish = Math.max(...allocs.map((x) => x.end));
@@ -2021,6 +2132,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       teOk: col(hm, 'TE가공가능'),
       newSetupOk: col(hm, '신규셋팅가능', '신규세팅가능'),
       memo: col(hm, '비고'),
+      group: col(hm, '조', '작업조', '담당조', '반'),
     };
     return rows
       .slice(hm.start)
@@ -2084,7 +2196,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   function readWorkers(rows) {
     const hm = headerMap(rows, '호기');
     if (!hm) return [];
-    const c = { machine: col(hm, '호기'), worker: col(hm, '담당작업자'), room: col(hm, '방'), status: col(hm, '상태구분'), start: col(hm, '시작일'), end: col(hm, '종료일'), noSetup: col(hm, '신규세팅금지'), note: col(hm, '비고') };
+    const c = { machine: col(hm, '호기'), worker: col(hm, '담당작업자'), room: col(hm, '방'), status: col(hm, '상태구분'), start: col(hm, '시작일'), end: col(hm, '종료일'), noSetup: col(hm, '신규세팅금지'), note: col(hm, '비고'), group: col(hm, '조', '작업조', '담당조', '반') };
     return rows
       .slice(hm.start)
       .filter((r) => r && str(at(r, c.machine)))
@@ -2097,6 +2209,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         end: toSerial(at(r, c.end)),
         noSetup: str(at(r, c.noSetup)),
         note: str(at(r, c.note)),
+        group: str(at(r, c.group)),
       }));
   }
 
@@ -2272,7 +2385,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       for (let d = 0; d < days; d++) {
         const day = from + d;
         const hit = segs.find((s) => s.s <= day && s.e >= day);
-        row.push(hit ? (hit.s === day || d === 0 ? (hit.kind === 'draft' ? '▶' : '') + hit.productCode : '■') : null);
+        row.push(hit ? (hit.s === day || d === 0 ? (hit.kind === 'draft' ? '▶' : '') + hit.partCode : '■') : null);
       }
       g.push(row);
     }
@@ -2468,13 +2581,33 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   };
 
   const today = E.todaySerial();
-  const DEFAULTS = { baseOffset: 1, maxMachines: 10, allowB: true, bSlackDays: 2, expandToDue: true, delayPolicy: 'block', requireActualOk: false, matMap: '' };
+  const SETTINGS_VERSION = 2;
+  const DEFAULTS = {
+    v: SETTINGS_VERSION,
+    baseOffset: 1,
+    allocMode: 'spread',
+    minRunDays: 7,
+    maxRunDays: 30,
+    maxMachines: 6,
+    groupMode: 'auto',
+    groupSize: 10,
+    perGroupMax: 1,
+    setupLimitPerGroupDay: 2,
+    allowB: true,
+    bSlackDays: 2,
+    expandToDue: true,
+    delayPolicy: 'block',
+    requireActualOk: false,
+    matMap: '',
+  };
+  const savedSettings = store.get('cnc.settings', {});
   const S = {
     model: null,
     source: '',
     isDemo: true,
     planner: null,
-    settings: Object.assign({}, DEFAULTS, store.get('cnc.settings', {})),
+    // 배정방식이 바뀐 v2 이전 저장값은 소재매핑만 이어받는다
+    settings: savedSettings.v === SETTINGS_VERSION ? Object.assign({}, DEFAULTS, savedSettings) : Object.assign({}, DEFAULTS, { matMap: savedSettings.matMap || '' }),
     baseDate: today + 1,
     tab: store.get('cnc.tab', 'items'),
     page: 0,
@@ -2487,7 +2620,14 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return {
       today,
       baseDate: S.baseDate,
+      allocMode: S.settings.allocMode,
+      minRunDays: S.settings.minRunDays,
+      maxRunDays: S.settings.maxRunDays,
       maxMachines: S.settings.maxMachines,
+      groupMode: S.settings.groupMode,
+      groupSize: S.settings.groupSize,
+      perGroupMax: S.settings.perGroupMax,
+      setupLimitPerGroupDay: S.settings.setupLimitPerGroupDay,
       allowB: S.settings.allowB,
       bSlackDays: S.settings.bSlackDays,
       expandToDue: S.settings.expandToDue,
@@ -2589,7 +2729,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     const delayed = P.machines.filter((m) => P.timeline.status(m.no).delayed).length;
     const kp = [
       { label: '배정 대상 품목', value: nf(s.items), sub: '배정완료 ' + nf(s.done) + '건 포함' },
-      { label: '가배정', value: nf(s.draft), sub: '호기 ' + nf(s.machines) + '대 · 배정행 ' + nf(s.drafts), cls: 'draft' },
+      { label: '가배정', value: nf(s.draft), sub: (S.settings.allocMode === 'spread' ? '분산형' : '집중형') + ' · 호기 ' + nf(s.machines) + '대 · 배정행 ' + nf(s.drafts), cls: 'draft' },
       { label: '납기 초과 예상', value: nf(s.late), sub: '요청일보다 늦게 끝나는 가배정', cls: 'late' },
       { label: '수기검토', value: nf(s.review), sub: '자동기준 밖 품목', cls: 'review' },
       { label: '미처리', value: nf(s.todo), sub: s.todo ? '[자동 일정수립] 실행 필요' : '남은 품목 없음' },
@@ -2670,6 +2810,39 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     $('itemPager').innerHTML = pg;
   }
 
+  // 부품코드별 색: 같은 부품은 같은 색, 일정이 가까운 부품끼리는 색상환에서 멀리 떨어지도록 황금각으로 배정
+  const partColors = new Map();
+  function hslRgb(h, s, l) {
+    s /= 100;
+    l /= 100;
+    const k = (n) => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return [f(0), f(8), f(4)];
+  }
+  function buildPartColors() {
+    const first = new Map();
+    for (const segs of S.planner.timeline.byMachine.values())
+      for (const seg of segs) {
+        const k = E.up(seg.partCode);
+        if (k && (!first.has(k) || seg.s < first.get(k))) first.set(k, seg.s);
+      }
+    const parts = [...first.entries()].sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1));
+    partColors.clear();
+    parts.forEach(([k], i) => {
+      const h = (i * 137.508) % 360;
+      const l = [52, 66, 42][i % 3];
+      const sat = [62, 55, 58][Math.floor(i / 3) % 3];
+      const [r, g, b] = hslRgb(h, sat, l);
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      partColors.set(k, { bg: 'hsl(' + h.toFixed(0) + ' ' + sat + '% ' + l + '%)', fg: lum > 0.5 ? '#10161c' : '#ffffff' });
+    });
+  }
+  function partStyle(part) {
+    const c = partColors.get(E.up(part));
+    return c ? '--pc:' + c.bg + ';--pt:' + c.fg + ';' : '';
+  }
+
   // 간트
   const G = { rows: [], from: today - 3, days: 60, day: 30, row: 26, left: 112 };
   function ganttMetrics() {
@@ -2724,6 +2897,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     body.style.height = G.rows.length * G.row + 'px';
     body.style.width = G.left + G.days * G.day + 'px';
     body.dataset.from = '-1';
+    buildPartColors();
     paintGanttRows(true);
   }
   function paintGanttRows(force) {
@@ -2774,8 +2948,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           if (d && d.manual) cls += ' manual';
           if (S.selDraft === seg.draftId) cls += ' sel';
         }
-        const tip = (seg.kind === 'draft' ? '[가배정] ' : '[확정] ') + (seg.planNo || '') + ' ' + seg.productCode + ' / ' + seg.partCode + ' · ' + nf(seg.qty) + '개 · ' + E.fmtMD(seg.s) + '~' + E.fmtMD(seg.e) + (item && item.due != null ? ' · 요청일 ' + E.fmtMD(item.due) : '');
-        bars.push('<div class="' + cls + '" style="' + st + '" data-key="' + esc(item ? key : '') + '" data-draft="' + (seg.draftId || '') + '" title="' + esc(tip) + '">' + esc(seg.productCode || seg.partCode) + '</div>');
+        const tip = (seg.kind === 'draft' ? '[가배정] ' : '[확정] ') + seg.partCode + ' · ' + (seg.planNo || '') + ' ' + seg.productCode + ' · ' + (P.groupOf[m.no] || '') + ' · ' + nf(seg.qty) + '개 · ' + E.fmtMD(seg.s) + '~' + E.fmtMD(seg.e) + (item && item.due != null ? ' · 요청일 ' + E.fmtMD(item.due) : '');
+        bars.push('<div class="' + cls + '" style="' + st + ';' + partStyle(seg.partCode) + '" data-key="' + esc(item ? key : '') + '" data-part="' + esc(E.up(seg.partCode)) + '" data-draft="' + (seg.draftId || '') + '" title="' + esc(tip) + '">' + esc(seg.partCode || seg.productCode) + '</div>');
       }
       if (status.delayed && status.latest) {
         const st = place(status.latest.e + 1, today);
@@ -2890,6 +3064,23 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           .join('') +
         '</tbody></table></div></div>'
     );
+    // 조 구성
+    const groups = new Map();
+    for (const mc of P.machines) {
+      const g = P.groupOf[mc.no];
+      const e = groups.get(g) || { n: 0, room: mc.room };
+      e.n++;
+      groups.set(g, e);
+    }
+    let peak = 0;
+    for (const [k, v] of P.setupCount) if (Number(k.split('|')[1]) >= S.baseDate && v > peak) peak = v;
+    const srcText = { column: "마스터의 '조' 열", worker: '13_작업자운영마스터 담당작업자', block: '방별 호기번호 ' + S.settings.groupSize + '대 묶음' }[P.groupSource];
+    const sizes = [...groups.values()].map((g) => g.n);
+    cards.push(
+      '<div class="mcard"><h3>조 구성 ' + groups.size + '개</h3><p class="hint">기준: ' + esc(srcText) + ' · 조당 ' + Math.min(...sizes) + '~' + Math.max(...sizes) + '대. ' +
+        "분산형 배정은 한 품목을 한 조에 " + S.settings.perGroupMax + '대까지만 넣고, 조별 하루 신규셋팅을 ' + (S.settings.setupLimitPerGroupDay || '제한 없이') + (S.settings.setupLimitPerGroupDay ? '건 이하로' : '') + ' 맞춥니다. 실제 조 편성이 다르면 4_설비마스터에 "조" 열을 추가하세요.</p>' +
+        '<ul><li>기준게시일 이후 조별 하루 최대 신규셋팅 <b>' + peak + '건</b></li></ul></div>'
+    );
     // 미매핑 재질
     const mats = new Map();
     for (const it of P.items) {
@@ -2999,17 +3190,16 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     if (ds.length)
       html +=
         '<div class="alloc">' +
-        ds.map((d) => '<span class="chip draft">' + (d.manual ? '수기' : '자동') + ' <b>' + esc(d.machine) + '</b> ' + E.fmtMD(d.start) + '~' + E.fmtMD(d.end) + ' · ' + nf(d.qty) + '<button type="button" data-rmdraft="' + d.id + '" aria-label="' + esc(d.machine) + '호기 가배정 취소">✕</button></span>').join('') +
+        ds.map((d) => '<span class="chip draft">' + (d.manual ? '수기' : '자동') + ' <b>' + esc(d.machine) + '</b> ' + esc(P.groupOf[d.machine] || '') + ' · ' + E.fmtMD(d.start) + '~' + E.fmtMD(d.end) + ' · ' + nf(d.qty) + '<button type="button" data-rmdraft="' + d.id + '" aria-label="' + esc(d.machine) + '호기 가배정 취소">✕</button></span>').join('') +
         '</div><div class="row"><button class="btn small danger" type="button" id="dwClearDrafts">이 품목 가배정 모두 취소</button></div>';
     html += '</div>';
 
     // 후보
     const q = P.candidates(it, { from: S.baseDate });
     const cands = q.candidates;
-    const range = E.parseRecRange(E.recommendMachineRange(days));
-    const want = range ? range.min : Math.min(Math.max(Math.ceil(days / Math.max(1, it.availDays)), 3), S.settings.maxMachines);
-    const preset = work > 0 && cands.length ? P.batchPick(cands, want, Math.ceil((days || 1) / want), S.baseDate).map((c) => c.machine) : [];
-    html += '<div class="box"><h3>호기 선택 ' + (cands.length ? '<span class="hint">후보 ' + cands.length + '대 · 먼저 비는 안전후보 ' + preset.length + '대 미리 선택</span>' : '') + '</h3>';
+    const want = days > 0 ? P._countRange(it, days).min : 1;
+    const preset = work > 0 && cands.length ? P.batchPick(cands, want, Math.ceil((days || 1) / want), S.baseDate, it.partCode).map((c) => c.machine) : [];
+    html += '<div class="box"><h3>호기 선택 ' + (cands.length ? '<span class="hint">후보 ' + cands.length + '대 · ' + (S.settings.allocMode === 'spread' ? '조별 분산·' : '') + '먼저 비는 안전후보 ' + preset.length + '대 미리 선택</span>' : '') + '</h3>';
     if (!cands.length) html += '<p class="hint">' + esc(['PL', 'TE', 'BD'].includes(it.main) ? P.diagText(it, q.diag, q.bd) : '자동추천 대상이 아닌 대분류입니다') + ' · 아래에 호기 번호를 직접 입력하세요.</p>';
     html +=
       '<div class="row"><label for="dwMachines">배정 호기</label><input type="text" id="dwMachines" value="' + esc(preset.join('/')) + '" placeholder="527 또는 527/528">' +
@@ -3019,12 +3209,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     if (cands.length) {
       const sel = new Set(preset);
       html +=
-        '<div class="table-wrap"><table class="grid cand-table"><thead><tr><th></th><th>순위</th><th>등급</th><th>호기</th><th>방</th><th>기종</th><th>현재소재</th><th>소재비교</th><th>작업상태</th><th>가용구간</th><th class="num">점수</th><th>비고</th></tr></thead><tbody>' +
+        '<div class="table-wrap"><table class="grid cand-table"><thead><tr><th></th><th>순위</th><th>등급</th><th>호기</th><th>방</th><th>조</th><th>기종</th><th>현재소재</th><th>소재비교</th><th>작업상태</th><th>가용구간</th><th class="num">점수</th><th>비고</th></tr></thead><tbody>' +
         cands
           .slice(0, 80)
           .map(
             (c) =>
-              '<tr data-cand="' + esc(c.machine) + '"><td><input type="checkbox" aria-label="' + esc(c.machine) + '호기 선택" data-pick="' + esc(c.machine) + '"' + (sel.has(c.machine) ? ' checked' : '') + '></td><td class="num">' + c.rank + '</td><td>' + gradeHtml(c.grade) + '</td><td class="code"><b>' + esc(c.machine) + '</b></td><td>' + esc(c.room) + '</td><td>' + esc(c.model) + '</td><td>' + esc(c.material) + '</td><td>' + esc(c.settingText) + '</td><td>' + esc(c.work) + '</td><td class="when">' + esc(c.availText) + '</td><td class="num">' + c.score + '</td><td class="reason">' + esc([c.roomReason, c.note].filter(Boolean).join(' / ')) + '</td></tr>'
+              '<tr data-cand="' + esc(c.machine) + '"><td><input type="checkbox" aria-label="' + esc(c.machine) + '호기 선택" data-pick="' + esc(c.machine) + '"' + (sel.has(c.machine) ? ' checked' : '') + '></td><td class="num">' + c.rank + '</td><td>' + gradeHtml(c.grade) + '</td><td class="code"><b>' + esc(c.machine) + '</b></td><td>' + esc(c.room) + '</td><td>' + esc(P.groupOf[c.machine] || '') + '</td><td>' + esc(c.model) + '</td><td>' + esc(c.material) + '</td><td>' + esc(c.settingText) + '</td><td>' + esc(c.work) + '</td><td class="when">' + esc(c.availText) + '</td><td class="num">' + c.score + '</td><td class="reason">' + esc([c.roomReason, c.note].filter(Boolean).join(' / ')) + '</td></tr>'
           )
           .join('') +
         '</tbody></table></div>' +
@@ -3184,7 +3374,14 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   function openSettings() {
     const s = S.settings;
     $('setBase').value = E.fmtYMD(S.baseDate);
+    $('setMode').value = s.allocMode;
+    $('setMinRun').value = s.minRunDays;
+    $('setMaxRun').value = s.maxRunDays;
     $('setMax').value = s.maxMachines;
+    $('setGroupMode').value = s.groupMode;
+    $('setGroupSize').value = s.groupSize;
+    $('setPerGroup').value = s.perGroupMax;
+    $('setSetupLimit').value = s.setupLimitPerGroupDay;
     $('setAllowB').value = s.allowB ? '1' : '0';
     $('setSlack').value = s.bSlackDays;
     $('setExpand').value = s.expandToDue ? '1' : '0';
@@ -3195,9 +3392,22 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
   function applySettings() {
     const base = E.toSerial($('setBase').value);
+    const num = (id, d, lo) => {
+      const v = Number($(id).value);
+      return isFinite(v) && $(id).value !== '' ? Math.max(lo, v) : d;
+    };
+    const minRun = num('setMinRun', 7, 1);
     S.settings = {
+      v: SETTINGS_VERSION,
       baseOffset: base != null ? base - today : 1,
-      maxMachines: Math.max(1, Number($('setMax').value) || 10),
+      allocMode: $('setMode').value,
+      minRunDays: minRun,
+      maxRunDays: Math.max(minRun, num('setMaxRun', 30, 1)),
+      maxMachines: num('setMax', 6, 1),
+      groupMode: $('setGroupMode').value,
+      groupSize: num('setGroupSize', 10, 1),
+      perGroupMax: num('setPerGroup', 1, 1),
+      setupLimitPerGroupDay: num('setSetupLimit', 2, 0),
       allowB: $('setAllowB').value === '1',
       bSlackDays: Math.max(0, Number($('setSlack').value) || 0),
       expandToDue: $('setExpand').value === '1',
@@ -3296,6 +3506,18 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       if (b && b.dataset.key) openItem(b.dataset.key, Number(b.dataset.draft) || null);
     });
     window.addEventListener('resize', () => S.tab === 'gantt' && renderGantt());
+    // 막대에 마우스를 올리면 같은 부품의 다른 호기 막대를 함께 강조
+    let hlPart = '';
+    const setHl = (part) => {
+      if (part === hlPart) return;
+      hlPart = part;
+      for (const b of $('ganttBody').querySelectorAll('.bar[data-part]')) b.classList.toggle('hl', !!part && b.dataset.part === part);
+    };
+    $('ganttBody').addEventListener('mouseover', (e) => {
+      const b = e.target.closest('.bar[data-part]');
+      setHl(b ? b.dataset.part : '');
+    });
+    $('ganttBody').addEventListener('mouseleave', () => setHl(''));
 
     $('dwClose').onclick = closeDrawer;
     document.addEventListener('keydown', (e) => {

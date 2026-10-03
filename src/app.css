@@ -199,19 +199,22 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .g-row .we { position: absolute; top: 0; bottom: 0; width: var(--day); background: var(--weekend); }
 .g-row .todayline { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--today); opacity: 0.55; }
 .bar { position: absolute; top: 3px; height: calc(var(--row) - 7px); border-radius: 4px; font-size: 11px; line-height: calc(var(--row) - 7px); padding: 0 5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; color: #fff; border: 1px solid transparent; }
-.bar.confirmed { background: var(--confirmed); }
-.bar.confirmed.done { opacity: 0.55; }
-.bar.draft { background: var(--draft); color: #1d1405; }
-.bar.draft.late { background: var(--late); color: #fff; }
-.bar.draft.manual { box-shadow: inset 0 0 0 2px rgba(0,0,0,0.25); }
+.bar { background: var(--pc, var(--confirmed)); color: var(--pt, #fff); }
+.bar.confirmed { border-color: rgba(0, 0, 0, 0.35); }
+.bar.confirmed.done { opacity: 0.5; }
+.bar.draft { background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.38) 0 5px, transparent 5px 10px); border: 1px dashed rgba(0, 0, 0, 0.55); }
+.bar.draft.late { box-shadow: inset 0 0 0 2px var(--late); }
+.bar.draft.manual { border-style: solid; border-width: 2px; }
 .bar.block { background: repeating-linear-gradient(45deg, var(--block) 0 4px, transparent 4px 8px); color: var(--ink); cursor: default; border-color: var(--block); }
 .bar.sel { outline: 2px solid var(--ink); outline-offset: 1px; }
+.bar.hl { outline: 2px solid var(--ink); }
+.bar.dim { opacity: 0.25; }
 .bar.delayflag { background: transparent; border: 1px dashed var(--late); color: var(--late); cursor: default; }
 .legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--muted); }
 .lg { display: inline-block; width: 14px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
-.lg.confirmed { background: var(--confirmed); }
-.lg.draft { background: var(--draft); }
-.lg.late { background: var(--late); }
+.lg.confirmed { background: var(--confirmed); border: 1px solid rgba(0,0,0,0.35); }
+.lg.draft { background: var(--confirmed) repeating-linear-gradient(135deg, rgba(255,255,255,0.45) 0 3px, transparent 3px 6px); border: 1px dashed rgba(0,0,0,0.55); }
+.lg.late { box-shadow: inset 0 0 0 2px var(--late); }
 .lg.block { background: repeating-linear-gradient(45deg, var(--block) 0 3px, transparent 3px 6px); border: 1px solid var(--block); }
 .lg.delay { border: 1px dashed var(--late); }
 

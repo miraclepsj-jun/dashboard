@@ -156,3 +156,41 @@ test('가배정 상태 저장/복원', () => {
   assert.equal(Q.importState(state), P.drafts.length);
   assert.deepEqual(Q.summary(), P.summary());
 });
+
+test('분산형: 한 품목은 조마다 1대, 조별 하루 신규셋팅 한도 준수', () => {
+  const P = new E.Planner(Demo.build(TODAY), { today: TODAY, groupSize: 3, setupLimitPerGroupDay: 1 });
+  P.autoPlan();
+  assert.equal(P.groupSource, 'block');
+  const byItem = {};
+  for (const d of P.drafts) (byItem[d.itemKey] = byItem[d.itemKey] || []).push(d);
+  for (const list of Object.values(byItem)) {
+    const groups = list.map((d) => P.groupOf[d.machine]);
+    assert.equal(new Set(groups).size, groups.length, '같은 조에 두 대 배정됨');
+  }
+  for (const [k, v] of P.setupCount) if (Number(k.split('|')[1]) >= TODAY + 1) assert.ok(v <= 1, k + ' 신규셋팅 ' + v + '건');
+});
+
+test('분산형: 요청일까지 기간을 늘려 대수를 줄이고, 이미 늦은 품목은 최대 대수로 몰지 않음', () => {
+  const m = Demo.build(TODAY);
+  m.raw = [
+    { planNo: 'A', productCode: 'X1', partCode: 'TEGX101AM-DGP', qty: 120000, reqDate: TODAY + 30, material: 'TK-B' }, // 41일분
+    { planNo: 'B', productCode: 'X2', partCode: 'TEGX202AM-DGP', qty: 120000, reqDate: TODAY - 10, material: 'TK-B' },
+  ];
+  const spread = new E.Planner(m, { today: TODAY, maxMachines: 6, minRunDays: 7, maxRunDays: 30 });
+  assert.equal(spread._countRange(spread.items[0], 41).min, 2); // 41일 / 30일 → 2대
+  assert.deepEqual(spread._countRange(spread.items[1], 41), { min: 6, max: 6 }); // 늦은 품목: 41/7=6 고정
+  const fast = new E.Planner(m, { today: TODAY, allocMode: 'fast', maxMachines: 10 });
+  assert.equal(fast._countRange(fast.items[1], 41).min, 10);
+  spread.autoPlan();
+  const a = spread.drafts.filter((d) => d.partCode === 'TEGX101AM-DGP');
+  assert.ok(a.length >= 2 && a.length <= 3);
+  assert.ok(Math.max(...a.map((d) => d.end)) <= TODAY + 30 + 1);
+});
+
+test('셋팅 수: 같은 부품을 이어서 가공하면 신규셋팅으로 세지 않음', () => {
+  const P = new E.Planner(Demo.build(TODAY), { today: TODAY, setupLimitPerGroupDay: 1 });
+  const it = P.items[1];
+  const day = TODAY + 2; // 519호기 확정이 TODAY+1에 끝남
+  assert.equal(P._isContinuation('519', day, it.partCode), true);
+  assert.equal(P.startFor('519', TODAY + 1, 3, it.partCode), day);
+});
