@@ -26,7 +26,7 @@
   };
 
   const today = E.todaySerial();
-  const SETTINGS_VERSION = 2;
+  const SETTINGS_VERSION = 3;
   const DEFAULTS = {
     v: SETTINGS_VERSION,
     baseOffset: 1,
@@ -34,10 +34,8 @@
     minRunDays: 7,
     maxRunDays: 30,
     maxMachines: 6,
-    groupMode: 'auto',
-    groupSize: 10,
     perGroupMax: 1,
-    setupLimitPerGroupDay: 2,
+    setupLimitPerWorkerDay: 5,
     allowB: true,
     bSlackDays: 2,
     expandToDue: true,
@@ -51,7 +49,7 @@
     source: '',
     isDemo: true,
     planner: null,
-    // 배정방식이 바뀐 v2 이전 저장값은 소재매핑만 이어받는다
+    // 배정방식이 바뀐 이전 버전 저장값은 소재매핑만 이어받는다
     settings: savedSettings.v === SETTINGS_VERSION ? Object.assign({}, DEFAULTS, savedSettings) : Object.assign({}, DEFAULTS, { matMap: savedSettings.matMap || '' }),
     baseDate: today + 1,
     tab: store.get('cnc.tab', 'items'),
@@ -69,10 +67,8 @@
       minRunDays: S.settings.minRunDays,
       maxRunDays: S.settings.maxRunDays,
       maxMachines: S.settings.maxMachines,
-      groupMode: S.settings.groupMode,
-      groupSize: S.settings.groupSize,
       perGroupMax: S.settings.perGroupMax,
-      setupLimitPerGroupDay: S.settings.setupLimitPerGroupDay,
+      setupLimitPerWorkerDay: S.settings.setupLimitPerWorkerDay,
       allowB: S.settings.allowB,
       bSlackDays: S.settings.bSlackDays,
       expandToDue: S.settings.expandToDue,
@@ -509,22 +505,23 @@
           .join('') +
         '</tbody></table></div></div>'
     );
-    // 조 구성
+    // 조(방) 구성과 작업자 신규셋팅
     const groups = new Map();
-    for (const mc of P.machines) {
-      const g = P.groupOf[mc.no];
-      const e = groups.get(g) || { n: 0, room: mc.room };
-      e.n++;
-      groups.set(g, e);
-    }
+    for (const mc of P.machines) groups.set(P.groupOf[mc.no], (groups.get(P.groupOf[mc.no]) || 0) + 1);
+    const workers = new Set(P.machines.map((mc) => P.workerByMachine[mc.no]).filter(Boolean));
     let peak = 0;
-    for (const [k, v] of P.setupCount) if (Number(k.split('|')[1]) >= S.baseDate && v > peak) peak = v;
-    const srcText = { column: "마스터의 '조' 열", worker: '13_작업자운영마스터 담당작업자', block: '방별 호기번호 ' + S.settings.groupSize + '대 묶음' }[P.groupSource];
-    const sizes = [...groups.values()].map((g) => g.n);
+    let peakKey = '';
+    for (const [k, v] of P.setupCount)
+      if (Number(k.split('|')[1]) >= S.baseDate && k.startsWith('작업자') && v > peak) {
+        peak = v;
+        peakKey = k;
+      }
+    const lim = S.settings.setupLimitPerWorkerDay;
     cards.push(
-      '<div class="mcard"><h3>조 구성 ' + groups.size + '개</h3><p class="hint">기준: ' + esc(srcText) + ' · 조당 ' + Math.min(...sizes) + '~' + Math.max(...sizes) + '대. ' +
-        "분산형 배정은 한 품목을 한 조에 " + S.settings.perGroupMax + '대까지만 넣고, 조별 하루 신규셋팅을 ' + (S.settings.setupLimitPerGroupDay || '제한 없이') + (S.settings.setupLimitPerGroupDay ? '건 이하로' : '') + ' 맞춥니다. 실제 조 편성이 다르면 4_설비마스터에 "조" 열을 추가하세요.</p>' +
-        '<ul><li>기준게시일 이후 조별 하루 최대 신규셋팅 <b>' + peak + '건</b></li></ul></div>'
+      '<div class="mcard"><h3>조(방) ' + groups.size + '개 · 담당작업자 ' + workers.size + '명</h3><p class="hint">분산형 배정은 한 품목을 한 방에 ' + S.settings.perGroupMax + '대까지만 넣고 다른 방의 가능한 호기로 나눕니다. ' +
+        (lim ? '작업자 1인의 하루 신규셋팅이 ' + lim + '건을 넘으면 다음 날로 미룹니다 (13_작업자운영마스터 담당작업자 기준, 담당작업자가 없는 호기는 제외).' : '작업자 신규셋팅 한도는 꺼져 있습니다.') +
+        '</p><ul>' + [...groups.entries()].map(([g, n]) => '<li>' + esc(g) + ' <b>' + n + '대</b></li>').join('') +
+        '<li>기준게시일 이후 1인 하루 최대 신규셋팅 <b>' + peak + '건</b>' + (peakKey ? ' (' + esc(peakKey.split('|')[0]) + ', ' + E.fmtMD(Number(peakKey.split('|')[1])) + ')' : '') + '</li></ul></div>'
     );
     // 미매핑 재질
     const mats = new Map();
@@ -635,7 +632,7 @@
     if (ds.length)
       html +=
         '<div class="alloc">' +
-        ds.map((d) => '<span class="chip draft">' + (d.manual ? '수기' : '자동') + ' <b>' + esc(d.machine) + '</b> ' + esc(P.groupOf[d.machine] || '') + ' · ' + E.fmtMD(d.start) + '~' + E.fmtMD(d.end) + ' · ' + nf(d.qty) + '<button type="button" data-rmdraft="' + d.id + '" aria-label="' + esc(d.machine) + '호기 가배정 취소">✕</button></span>').join('') +
+        ds.map((d) => '<span class="chip draft">' + (d.manual ? '수기' : '자동') + ' <b>' + esc(d.machine) + '</b> ' + esc(P.groupOf[d.machine] || '') + (P.workerByMachine[d.machine] ? ' ' + esc(P.workerByMachine[d.machine]) : '') + ' · ' + E.fmtMD(d.start) + '~' + E.fmtMD(d.end) + ' · ' + nf(d.qty) + '<button type="button" data-rmdraft="' + d.id + '" aria-label="' + esc(d.machine) + '호기 가배정 취소">✕</button></span>').join('') +
         '</div><div class="row"><button class="btn small danger" type="button" id="dwClearDrafts">이 품목 가배정 모두 취소</button></div>';
     html += '</div>';
 
@@ -644,7 +641,7 @@
     const cands = q.candidates;
     const want = days > 0 ? P._countRange(it, days).min : 1;
     const preset = work > 0 && cands.length ? P.batchPick(cands, want, Math.ceil((days || 1) / want), S.baseDate, it.partCode).map((c) => c.machine) : [];
-    html += '<div class="box"><h3>호기 선택 ' + (cands.length ? '<span class="hint">후보 ' + cands.length + '대 · ' + (S.settings.allocMode === 'spread' ? '조별 분산·' : '') + '먼저 비는 안전후보 ' + preset.length + '대 미리 선택</span>' : '') + '</h3>';
+    html += '<div class="box"><h3>호기 선택 ' + (cands.length ? '<span class="hint">후보 ' + cands.length + '대 · ' + (S.settings.allocMode === 'spread' ? '방별 분산·' : '') + '먼저 비는 안전후보 ' + preset.length + '대 미리 선택</span>' : '') + '</h3>';
     if (!cands.length) html += '<p class="hint">' + esc(['PL', 'TE', 'BD'].includes(it.main) ? P.diagText(it, q.diag, q.bd) : '자동추천 대상이 아닌 대분류입니다') + ' · 아래에 호기 번호를 직접 입력하세요.</p>';
     html +=
       '<div class="row"><label for="dwMachines">배정 호기</label><input type="text" id="dwMachines" value="' + esc(preset.join('/')) + '" placeholder="527 또는 527/528">' +
@@ -654,12 +651,12 @@
     if (cands.length) {
       const sel = new Set(preset);
       html +=
-        '<div class="table-wrap"><table class="grid cand-table"><thead><tr><th></th><th>순위</th><th>등급</th><th>호기</th><th>방</th><th>조</th><th>기종</th><th>현재소재</th><th>소재비교</th><th>작업상태</th><th>가용구간</th><th class="num">점수</th><th>비고</th></tr></thead><tbody>' +
+        '<div class="table-wrap"><table class="grid cand-table"><thead><tr><th></th><th>순위</th><th>등급</th><th>호기</th><th>방</th><th>담당</th><th>기종</th><th>현재소재</th><th>소재비교</th><th>작업상태</th><th>가용구간</th><th class="num">점수</th><th>비고</th></tr></thead><tbody>' +
         cands
           .slice(0, 80)
           .map(
             (c) =>
-              '<tr data-cand="' + esc(c.machine) + '"><td><input type="checkbox" aria-label="' + esc(c.machine) + '호기 선택" data-pick="' + esc(c.machine) + '"' + (sel.has(c.machine) ? ' checked' : '') + '></td><td class="num">' + c.rank + '</td><td>' + gradeHtml(c.grade) + '</td><td class="code"><b>' + esc(c.machine) + '</b></td><td>' + esc(c.room) + '</td><td>' + esc(P.groupOf[c.machine] || '') + '</td><td>' + esc(c.model) + '</td><td>' + esc(c.material) + '</td><td>' + esc(c.settingText) + '</td><td>' + esc(c.work) + '</td><td class="when">' + esc(c.availText) + '</td><td class="num">' + c.score + '</td><td class="reason">' + esc([c.roomReason, c.note].filter(Boolean).join(' / ')) + '</td></tr>'
+              '<tr data-cand="' + esc(c.machine) + '"><td><input type="checkbox" aria-label="' + esc(c.machine) + '호기 선택" data-pick="' + esc(c.machine) + '"' + (sel.has(c.machine) ? ' checked' : '') + '></td><td class="num">' + c.rank + '</td><td>' + gradeHtml(c.grade) + '</td><td class="code"><b>' + esc(c.machine) + '</b></td><td>' + esc(c.room) + '</td><td>' + esc(P.workerByMachine[c.machine] || '') + '</td><td>' + esc(c.model) + '</td><td>' + esc(c.material) + '</td><td>' + esc(c.settingText) + '</td><td>' + esc(c.work) + '</td><td class="when">' + esc(c.availText) + '</td><td class="num">' + c.score + '</td><td class="reason">' + esc([c.roomReason, c.note].filter(Boolean).join(' / ')) + '</td></tr>'
           )
           .join('') +
         '</tbody></table></div>' +
@@ -823,10 +820,8 @@
     $('setMinRun').value = s.minRunDays;
     $('setMaxRun').value = s.maxRunDays;
     $('setMax').value = s.maxMachines;
-    $('setGroupMode').value = s.groupMode;
-    $('setGroupSize').value = s.groupSize;
     $('setPerGroup').value = s.perGroupMax;
-    $('setSetupLimit').value = s.setupLimitPerGroupDay;
+    $('setSetupLimit').value = s.setupLimitPerWorkerDay;
     $('setAllowB').value = s.allowB ? '1' : '0';
     $('setSlack').value = s.bSlackDays;
     $('setExpand').value = s.expandToDue ? '1' : '0';
@@ -849,10 +844,8 @@
       minRunDays: minRun,
       maxRunDays: Math.max(minRun, num('setMaxRun', 30, 1)),
       maxMachines: num('setMax', 6, 1),
-      groupMode: $('setGroupMode').value,
-      groupSize: num('setGroupSize', 10, 1),
       perGroupMax: num('setPerGroup', 1, 1),
-      setupLimitPerGroupDay: num('setSetupLimit', 2, 0),
+      setupLimitPerWorkerDay: num('setSetupLimit', 5, 0),
       allowB: $('setAllowB').value === '1',
       bSlackDays: Math.max(0, Number($('setSlack').value) || 0),
       expandToDue: $('setExpand').value === '1',

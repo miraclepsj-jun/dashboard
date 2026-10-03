@@ -721,36 +721,23 @@
     }
 
     /**
-     * 조(작업 그룹) 구성. 우선순위:
-     * 1) 설비마스터/작업자운영마스터의 '조' 열  2) 담당작업자(한 작업자가 여러 호기를 맡는 경우)
-     * 3) 방 안에서 호기번호 순 N대(groupSize) 단위 묶음
+     * 조 = 방 (4_설비마스터 '방' 열, 없으면 13_작업자운영마스터 '방' 열).
+     * 신규셋팅 한도는 사람 기준: 13_작업자운영마스터 담당작업자 1인당 하루 N건.
+     * 담당작업자가 없는 호기는 한도를 적용하지 않는다(호기 단독으로 계산).
      */
     _buildGroups(model) {
-      const mode = this.opts.groupMode || 'auto';
-      const size = Math.max(1, this.opts.groupSize || 10);
-      this.groupOf = {};
-      const fromCol = {};
-      for (const m of this.machines) if (str(m.group)) fromCol[m.no] = str(m.group);
+      const workerRoom = {};
       for (const w of model.workers || []) {
         const m = machineNo(w.machine);
-        if (m && str(w.group) && !fromCol[m]) fromCol[m] = str(w.group);
+        if (m && str(w.room) && !workerRoom[m]) workerRoom[m] = str(w.room);
       }
-      const workerShared = Object.values(this.machinesByWorker).some((l) => l.length > 1);
-      let source = 'block';
-      if ((mode === 'auto' || mode === 'column') && Object.keys(fromCol).length) source = 'column';
-      else if ((mode === 'auto' || mode === 'worker') && workerShared) source = 'worker';
-      const byRoom = {};
-      for (const m of this.machines) (byRoom[m.room] = byRoom[m.room] || []).push(m.no);
-      for (const [room, list] of Object.entries(byRoom)) {
-        list.sort((a, b) => Number(a) - Number(b));
-        list.forEach((no, i) => {
-          let g = null;
-          if (source === 'column') g = fromCol[no] ? '조 ' + fromCol[no] : null;
-          else if (source === 'worker') g = this.workerByMachine[no] ? '작업자 ' + this.workerByMachine[no] : null;
-          this.groupOf[no] = g || room + ' ' + (Math.floor(i / size) + 1) + '조';
-        });
+      this.groupOf = {};
+      this.setupKeyOf = {};
+      for (const m of this.machines) {
+        this.groupOf[m.no] = str(m.room) || workerRoom[m.no] || '방 미지정';
+        const w = this.workerByMachine[m.no];
+        this.setupKeyOf[m.no] = w ? '작업자 ' + w : '호기 ' + m.no;
       }
-      this.groupSource = source;
     }
     _isContinuation(m, start, partCode) {
       const prev = this.timeline.prevSegmentEndingAt(m, start - 1);
@@ -762,17 +749,17 @@
     }
     _countSetup(m, day, partCode, delta) {
       if (this._isContinuation(m, day, partCode)) return;
-      const k = this.groupOf[m] + '|' + day;
+      const k = this.setupKeyOf[m] + '|' + day;
       this.setupCount.set(k, (this.setupCount.get(k) || 0) + delta);
     }
     setupsOn(m, day) {
-      return this.setupCount.get(this.groupOf[m] + '|' + day) || 0;
+      return this.setupCount.get(this.setupKeyOf[m] + '|' + day) || 0;
     }
-    /** 빈 구간 + 조별 하루 신규셋팅 한도를 함께 만족하는 시작일. */
+    /** 빈 구간 + 작업자 1인 하루 신규셋팅 한도를 함께 만족하는 시작일. */
     startFor(m, from, days, partCode) {
       const tl = this.timeline;
       let s = tl.gapStart(m, from, days);
-      const limit = this.opts.setupLimitPerGroupDay || 0;
+      const limit = this.opts.setupLimitPerWorkerDay != null ? this.opts.setupLimitPerWorkerDay : 5;
       if (!limit || s == null) return s;
       for (let guard = 0; guard < 90 && s != null; guard++) {
         if (this._isContinuation(m, s, partCode) || this.setupsOn(m, s) < limit) return s;
@@ -1058,12 +1045,21 @@
         if (fit) break;
       }
       spread();
+      // 같은 품목의 여러 호기가 한 작업자에게 같은 날 몰리지 않도록, 앞 호기의 시작을 임시로 세면서 확정
+      const temp = [];
+      const release = () => temp.forEach(([m, d]) => this._countSetup(m, d, partCode, -1));
       for (let i = 0; i < ms.length; i++) {
         if (!valid[i] || days[i] <= 0) continue;
         const g = this.startFor(ms[i], from, days[i], partCode);
-        if (g == null) return null;
+        if (g == null) {
+          release();
+          return null;
+        }
         start[i] = g;
+        this._countSetup(ms[i], g, partCode, 1);
+        temp.push([ms[i], g]);
       }
+      release();
       const qty = distributeQtyHundreds(totalQty, days);
       const res = [];
       for (let i = 0; i < ms.length; i++) {
@@ -1192,7 +1188,7 @@
       }
       pool.sort((a, b) => a.key - b.key || b.c.score - a.c.score || a.c.rank - b.c.rank);
       if (!perGroup) return pool.slice(0, count).map((p) => p.c);
-      // 같은 조에 몰지 않는다: 조당 perGroup대까지 먼저 채우고, 모자라면 한도를 늘려 보충
+      // 같은 방(조)에 몰지 않는다: 방당 perGroup대까지 먼저 채우고, 모자라면 한도를 늘려 보충
       const picked = [];
       const used = new Map();
       for (let lim = perGroup; picked.length < count && lim <= count; lim++) {

@@ -26,7 +26,7 @@
   <section class="flow" aria-label="작업 순서">
     <ol>
       <li><b>불러오기</b> 통합문서(.xlsm) 또는 일정관리 프로그램 복사분 붙여넣기</li>
-      <li><b>자동 일정수립</b> 납기순으로 적은 호기에 길게, 조별로 분산 가배정</li>
+      <li><b>자동 일정수립</b> 납기순으로 적은 호기에 길게, 방(조)별로 분산 가배정</li>
       <li><b>검토·수정</b> 간트/품목에서 호기 변경, 수기검토 품목 배정</li>
       <li><b>내보내기</b> 9번 확정시트 붙여넣기용 + 설비1~A 입력요약</li>
     </ol>
@@ -121,21 +121,17 @@
       <label for="setBase">기준게시일 (배정 시작 가능일)</label>
       <input type="date" id="setBase">
       <label for="setMode">배정 방식</label>
-      <select id="setMode"><option value="spread">분산형 – 기간을 늘려 적은 호기, 조별 분산 (현장방식)</option><option value="fast">집중형 – 권장대수로 최단 완료</option></select>
+      <select id="setMode"><option value="spread">분산형 – 기간을 늘려 적은 호기, 방(조)별 분산 (현장방식)</option><option value="fast">집중형 – 권장대수로 최단 완료</option></select>
       <label for="setMinRun">최소 가공기간 (일)</label>
       <input type="number" id="setMinRun" min="1" max="60" value="7">
       <label for="setMaxRun">최대 가공기간 (일)</label>
       <input type="number" id="setMaxRun" min="1" max="120" value="30">
       <label for="setMax">품목당 최대 호기 수</label>
       <input type="number" id="setMax" min="1" max="30" value="6">
-      <label for="setGroupMode">조 구성 기준</label>
-      <select id="setGroupMode"><option value="auto">자동 (조 열 → 담당작업자 → 호기번호 묶음)</option><option value="column">설비/작업자 마스터의 '조' 열</option><option value="worker">담당작업자</option><option value="block">방별 호기번호 순 N대 묶음</option></select>
-      <label for="setGroupSize">묶음 단위 호기 수 (N)</label>
-      <input type="number" id="setGroupSize" min="1" max="50" value="10">
-      <label for="setPerGroup">한 품목이 한 조에 쓰는 호기 수</label>
+      <label for="setPerGroup">한 품목이 한 방(조)에 쓰는 호기 수</label>
       <input type="number" id="setPerGroup" min="1" max="10" value="1">
-      <label for="setSetupLimit">조별 하루 신규셋팅 한도 (0=제한 없음)</label>
-      <input type="number" id="setSetupLimit" min="0" max="20" value="2">
+      <label for="setSetupLimit">작업자 1인 하루 신규셋팅 한도 (0=제한 없음)</label>
+      <input type="number" id="setSetupLimit" min="0" max="30" value="5">
       <label for="setAllowB">B-2차후보 자동선택</label>
       <select id="setAllowB"><option value="1">허용 (A후보가 늦게 비면 사용)</option><option value="0">A후보만</option></select>
       <label for="setSlack">B후보 불이익 (일)</label>

@@ -157,17 +157,23 @@ test('가배정 상태 저장/복원', () => {
   assert.deepEqual(Q.summary(), P.summary());
 });
 
-test('분산형: 한 품목은 조마다 1대, 조별 하루 신규셋팅 한도 준수', () => {
-  const P = new E.Planner(Demo.build(TODAY), { today: TODAY, groupSize: 3, setupLimitPerGroupDay: 1 });
+test('분산형: 한 품목은 방(조)마다 1대, 작업자 1인 하루 신규셋팅 한도 준수', () => {
+  const m = Demo.build(TODAY);
+  // 한 작업자가 방 안의 호기 5대씩 담당
+  for (const w of m.workers) w.worker = w.room + '-' + Math.floor((Number(w.machine) % 1000) / 5);
+  const P = new E.Planner(m, { today: TODAY, setupLimitPerWorkerDay: 1 });
   P.autoPlan();
-  assert.equal(P.groupSource, 'block');
+  assert.equal(P.groupOf['1'], '1번방');
   const byItem = {};
   for (const d of P.drafts) (byItem[d.itemKey] = byItem[d.itemKey] || []).push(d);
   for (const list of Object.values(byItem)) {
-    const groups = list.map((d) => P.groupOf[d.machine]);
-    assert.equal(new Set(groups).size, groups.length, '같은 조에 두 대 배정됨');
+    // 방마다 1대씩 먼저 채우고, 가능한 방이 모자랄 때만 같은 방에 고르게 더 넣는다
+    const per = {};
+    for (const d of list) per[P.groupOf[d.machine]] = (per[P.groupOf[d.machine]] || 0) + 1;
+    const n = Object.keys(per).length;
+    assert.ok(Math.max(...Object.values(per)) <= Math.ceil(list.length / n), '한 방에 몰림: ' + JSON.stringify(per));
   }
-  for (const [k, v] of P.setupCount) if (Number(k.split('|')[1]) >= TODAY + 1) assert.ok(v <= 1, k + ' 신규셋팅 ' + v + '건');
+  for (const [k, v] of P.setupCount) if (k.startsWith('작업자') && Number(k.split('|')[1]) >= TODAY + 1) assert.ok(v <= 1, k + ' 신규셋팅 ' + v + '건');
 });
 
 test('분산형: 요청일까지 기간을 늘려 대수를 줄이고, 이미 늦은 품목은 최대 대수로 몰지 않음', () => {
@@ -188,7 +194,7 @@ test('분산형: 요청일까지 기간을 늘려 대수를 줄이고, 이미 �
 });
 
 test('셋팅 수: 같은 부품을 이어서 가공하면 신규셋팅으로 세지 않음', () => {
-  const P = new E.Planner(Demo.build(TODAY), { today: TODAY, setupLimitPerGroupDay: 1 });
+  const P = new E.Planner(Demo.build(TODAY), { today: TODAY, setupLimitPerWorkerDay: 1 });
   const it = P.items[1];
   const day = TODAY + 2; // 519호기 확정이 TODAY+1에 끝남
   assert.equal(P._isContinuation('519', day, it.partCode), true);
