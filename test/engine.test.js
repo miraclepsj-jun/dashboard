@@ -106,7 +106,7 @@ test('일괄 자동배정: 겹침 없음, 수량 보존, 수기검토 사유 기
   for (const it of P.items) {
     if (it.dupOf != null) continue;
     const dq = P.draftQty(it.key);
-    if (dq) assert.equal(dq, it.qty - it.confirmedQty, it.partCode + ' 수량');
+    if (dq) assert.equal(dq, it.openQty - it.confirmedQty, it.partCode + ' 수량');
     const r = P.results[it.key];
     if (r && r.decision === '수기검토') assert.ok(r.reason.length > 0);
     if (it.main === 'BG') assert.equal(r.decision, '수기검토');
@@ -257,4 +257,42 @@ test('담당자 조정: 가배정 기간/호기 변경, 겹침 거절, 지연 �
     const after = P.timeline.segments(d.machine).slice().sort((a, b) => a.s - b.s);
     for (let i = 1; i < after.length; i++) assert.ok(after[i].s > after[i - 1].effEnd);
   }
+});
+
+test('v670 수량 규칙: 배정대상수량 = 발주량 - 입고누계, 확정은 누적실적을 뺀 잔량', () => {
+  const m = Demo.build(TODAY);
+  m.raw = [
+    { planNo: 'Q1', productCode: 'LMG100', partCode: 'BDLMG100AM-GP1', qty: 20000, received: 16260, reqDate: TODAY + 5, material: 'TK-1' },
+    { planNo: 'Q2', productCode: 'X', partCode: 'PLDB777AR-B', qty: 0, need: 1500, reqDate: TODAY + 5, material: 'SK-4' },
+    { planNo: 'Q3', productCode: 'Y', partCode: 'PLDB778AR-B', qty: 5000, received: 5000, reqDate: TODAY + 5, material: 'SK-4' },
+    { planNo: 'Q4', productCode: 'Z', partCode: 'PLDB779AR-B', qty: 10000, received: 0, reqDate: TODAY + 5, material: 'SK-4' },
+  ];
+  m.confirmed = [{ planNo: 'Q4', productCode: 'Z', partCode: 'PLDB779AR-B', machine: '1', start: TODAY - 3, end: TODAY + 1, qty: 10000, actualQty: 4000 }];
+  const items = E.buildItems(m, { baseDate: TODAY + 1 });
+  assert.equal(items[0].openQty, 3740);
+  assert.equal(items[0].machineDays, 3); // ceil(3740/3000)+1
+  assert.equal(items[1].openQty, 1500); // 발주량 없으면 필요수량
+  assert.equal(items[2].status, '입고완료');
+  assert.equal(items[3].confirmedQty, 6000);
+  assert.equal(items[3].status, '추가배정');
+});
+
+test('초기일정이관: 9번이 비어 있으면 일정관리 프로그램 설비1~A + 개시/완료를 현행 일정으로 사용', () => {
+  const m = Demo.build(TODAY);
+  m.confirmed = [];
+  m.raw = [
+    { planNo: 'I1', productCode: 'A', partCode: 'PLDB901AR-B', qty: 10001, received: 0, reqDate: TODAY + 20, material: 'SK-4', refMachines: ['3', '4'], progStart: TODAY - 2, progEnd: TODAY + 3 },
+    { planNo: 'I2', productCode: 'B', partCode: 'PLDB902AR-B', qty: 5000, received: 0, reqDate: TODAY + 20, material: 'SK-4', refMachines: ['5'] },
+  ];
+  const P = new E.Planner(m, { today: TODAY });
+  assert.equal(P.initial.used, true);
+  assert.equal(P.initial.rows.length, 2);
+  assert.deepEqual(P.initial.rows.map((r) => r.qty), [5001, 5000]);
+  assert.equal(P.initial.skipped[0].reason, '개시/완료일 없음');
+  assert.equal(P.items[0].status, '배정완료');
+  assert.equal(P.timeline.gapStart('3', TODAY + 1, 1), TODAY + 4);
+  P.autoPlan();
+  assert.equal(P.confirmRows().filter((r) => r.initial).length, 2);
+  // 9번에 일정이 있으면 초기이관을 쓰지 않는다
+  assert.equal(new E.Planner(Demo.build(TODAY), { today: TODAY }).initial.used, false);
 });

@@ -53,11 +53,14 @@
       const idx = row.findIndex((v) => norm(v) === norm(keyHeader));
       if (idx >= 0) {
         const map = {};
+        const all = {};
         row.forEach((v, c) => {
           const k = norm(v);
-          if (k && map[k] == null) map[k] = c;
+          if (!k) return;
+          if (map[k] == null) map[k] = c;
+          (all[k] = all[k] || []).push(c);
         });
-        return { map, start: r + 1 };
+        return { map, all, start: r + 1 };
       }
     }
     return null;
@@ -73,7 +76,8 @@
 
   // ───────────── 원본(일정관리 프로그램 복사분) ─────────────
   // 헤더가 없을 때 쓰는 고정 위치 (기존 매크로: E/G/H/I/L/O/S/AS/AT, 설비1~A = AF~AO)
-  const RAW_FIXED = { planNo: 4, productCode: 6, partCode: 7, qty: 8, reqDate: 11, h2: 14, workArea: 18, schedule: 19, material: 44, special: 45, eq: [31, 32, 33, 34, 35, 36, 37, 38, 39, 40] };
+  // 입고량 K/AB, 필요수량 U, 개시 P, 완료 Q, 종료 R (v670 초기이관·미납잔량 기준)
+  const RAW_FIXED = { orderDate: 2, planNo: 4, productCode: 6, partCode: 7, qty: 8, received: [10, 27], need: 20, open: 15, finish: 16, close: 17, reqDate: 11, h2: 14, workArea: 18, schedule: 19, material: 44, special: 45, eq: [31, 32, 33, 34, 35, 36, 37, 38, 39, 40] };
 
   function rawColumns(rows) {
     const hm = headerMap(rows, '부품코드');
@@ -83,10 +87,16 @@
     return {
       start: hm.start,
       cols: {
+        orderDate: col(hm, '발주일', '발주일자'),
         planNo: col(hm, '계획번호'),
         productCode: col(hm, '제품코드'),
         partCode: col(hm, '부품코드'),
         qty: col(hm, '발주량', '발주수량', '수량'),
+        received: hm.all[norm('입고량')] || [],
+        need: col(hm, '필요수량'),
+        open: col(hm, '개시'),
+        finish: col(hm, '완료'),
+        close: col(hm, '종료'),
         reqDate: col(hm, '요청일', '납기', '납기일'),
         h2: col(hm, 'H2치수'),
         workArea: col(hm, '작업장'),
@@ -115,7 +125,13 @@
         productCode,
         partCode,
         qty: toNum(at(row, cols.qty)),
+        // 입고누계: 입고량 열이 둘(K/AB)이면 큰 값 (v670 RawReceivedQty)
+        received: Math.max(0, ...cols.received.map((c) => toNum(at(row, c)))),
+        need: toNum(at(row, cols.need)),
+        progStart: toSerial(at(row, cols.open)),
+        progEnd: toSerial(at(row, cols.finish)) != null ? toSerial(at(row, cols.finish)) : toSerial(at(row, cols.close)),
         reqDate: toSerial(at(row, cols.reqDate)),
+        orderDate: toSerial(at(row, cols.orderDate)),
         h2: at(row, cols.h2),
         workArea: str(at(row, cols.workArea)),
         schedule: str(at(row, cols.schedule)),

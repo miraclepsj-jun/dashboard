@@ -284,3 +284,6 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .edit-table .actions-cell { display: flex; gap: 4px; }
 .late-box { border-color: var(--late); background: var(--late-soft); }
 .late-text { color: var(--late); font-weight: 600; }
+.mcard.wide { grid-column: 1 / -1; }
+#learnFirst { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.mcard { align-content: start; }

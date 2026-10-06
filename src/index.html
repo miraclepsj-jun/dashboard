@@ -39,6 +39,7 @@
     <button role="tab" class="tab" data-tab="gantt" aria-selected="false" id="tab-gantt">간트차트</button>
     <button role="tab" class="tab" data-tab="review" aria-selected="false" id="tab-review">수기검토 <span class="count" id="reviewCount"></span></button>
     <button role="tab" class="tab" data-tab="master" aria-selected="false" id="tab-master">기준 점검</button>
+    <button role="tab" class="tab" data-tab="learn" aria-selected="false" id="tab-learn">현장 학습</button>
   </nav>
 
   <main>
@@ -82,6 +83,17 @@
 
     <section class="panel" id="panel-review" hidden>
       <div class="review" id="reviewList"></div>
+    </section>
+
+    <section class="panel" id="panel-learn" hidden>
+      <div class="toolbar">
+        <label class="btn" for="learnFile">수기 간트 불러오기 (.xlsx)</label>
+        <input type="file" id="learnFile" accept=".xlsx,.xlsm,.xls" hidden>
+        <label class="check" for="learnFirst">첫 날짜 칸</label>
+        <input type="date" id="learnFirst" aria-label="수기 간트 첫 날짜">
+        <span class="hint">방별 시트(행=호기, 열=날짜, 시작칸에 "부품코드/수량K(같이 도는 호기)" + 색칠 구간)를 읽습니다. 날짜 칸에는 "일"만 있으므로 첫 칸 날짜가 다르면 직접 입력하세요.</span>
+      </div>
+      <div class="master" id="learnBody"></div>
     </section>
 
     <section class="panel" id="panel-master" hidden>
@@ -140,6 +152,12 @@
       <select id="setDelay"><option value="block">완료확인 전 신규배정 금지 (기존 방식)</option><option value="assumeDone">계획완료일에 끝난 것으로 간주</option></select>
       <label for="setActualOk">완료 판정에 실적확인=Y 필요</label>
       <select id="setActualOk"><option value="0">아니오 (누적실적 ≥ 계획수량)</option><option value="1">예</option></select>
+      <label for="setPeriodOn">가공기간 보정 (현장 학습)</label>
+      <select id="setPeriodOn"><option value="1">적용 – 기준 장비일수 × 수량대별 계수</option><option value="0">적용 안 함 – 6_생산성기준 그대로</option></select>
+      <label for="setPF1">보정계수 1만 미만 / 1만~5만</label>
+      <div class="row"><input type="number" id="setPF1" min="0.2" max="3" step="0.05"><input type="number" id="setPF2" min="0.2" max="3" step="0.05"></div>
+      <label for="setPF3">보정계수 5만~15만 / 15만 이상</label>
+      <div class="row"><input type="number" id="setPF3" min="0.2" max="3" step="0.05"><input type="number" id="setPF4" min="0.2" max="3" step="0.05"></div>
       <label for="setMatMap">추가 소재계열 매핑</label>
       <textarea id="setMatMap" rows="3" spellcheck="false" placeholder="H5J=TK&#10;C3604=BECU"></textarea>
     </div>
@@ -158,4 +176,5 @@
 <script>/*__ENGINE__*/</script>
 <script>/*__WORKBOOK__*/</script>
 <script>/*__DEMO__*/</script>
+<script>/*__LEARN__*/</script>
 <script>/*__APP_JS__*/</script>

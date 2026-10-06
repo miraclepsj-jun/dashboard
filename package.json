@@ -5,7 +5,7 @@
   "description": "CNC 가공일정 자동수립 (엑셀 통합문서 연동, 단일 HTML)",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test test/*.test.js"
+    "test": "node --check src/app.js && node --test test/*.test.js"
   },
   "devDependencies": {
     "xlsx": "0.18.5"

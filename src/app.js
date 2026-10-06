@@ -41,6 +41,8 @@
     delayPolicy: 'block',
     requireActualOk: false,
     matMap: '',
+    periodOn: true,
+    periodFactors: { b1: 0.5, b2: 1.4, b3: 1.45, b4: 1.2 },
   };
   const savedSettings = store.get('cnc.settings', {});
   const S = {
@@ -73,6 +75,7 @@
       delayPolicy: S.settings.delayPolicy,
       requireActualOk: S.settings.requireActualOk,
       materialMap: E.parseMaterialMap(S.settings.matMap),
+      periodFactors: S.settings.periodOn ? S.settings.periodFactors : null,
     };
   }
 
@@ -148,6 +151,7 @@
     if (S.tab === 'gantt') renderGantt();
     if (S.tab === 'review') renderReview();
     if (S.tab === 'master') renderMaster();
+    if (S.tab === 'learn') renderLearn();
     renderReviewCount();
     if (S.openKey) renderDrawer();
   }
@@ -156,7 +160,7 @@
     const m = S.model;
     const txt = S.isDemo
       ? '예시 데이터(가상)로 열려 있습니다 · [엑셀 불러오기]로 회사 통합문서(.xlsm)를 여세요'
-      : S.source + ' · 원본 ' + nf(m.raw.length) + '행 · 설비 ' + nf(m.machines.length) + '대 · 확정일정 ' + nf(m.confirmed.length) + '건 · 기준게시일 ' + E.fmtYMD(S.baseDate);
+      : S.source + ' · 원본 ' + nf(m.raw.length) + '행 · 설비 ' + nf(m.machines.length) + '대 · ' + (S.planner.initial.used ? '9번 비어 있음 → 프로그램 기존배정 ' + nf(S.planner.initial.rows.length) + '행을 현행 일정으로 사용' : '확정일정 ' + nf(m.confirmed.length) + '건') + ' · 기준게시일 ' + E.fmtYMD(S.baseDate);
     $('sourceLine').textContent = txt;
   }
 
@@ -181,7 +185,7 @@
 
   function renderTabs() {
     for (const b of document.querySelectorAll('.tab')) b.setAttribute('aria-selected', String(b.dataset.tab === S.tab));
-    for (const t of ['items', 'gantt', 'review', 'master']) $('panel-' + t).hidden = t !== S.tab;
+    for (const t of ['items', 'gantt', 'review', 'master', 'learn']) $('panel-' + t).hidden = t !== S.tab;
   }
   function renderReviewCount() {
     const n = S.planner.summary().review;
@@ -461,6 +465,112 @@
   }
 
   // 기준 점검
+  // ───────────────────────── 현장 학습 (수기 간트) ─────────────────────────
+  S.learn = store.get('cnc.learn', null);
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) + '%' : '-');
+  function renderLearn() {
+    const L = window.CNCLearn;
+    const f = S.settings.periodFactors;
+    const cur = '현재 적용: ' + (S.settings.periodOn ? '1만 미만 ×' + f.b1 + ' · 1만~5만 ×' + f.b2 + ' · 5만~15만 ×' + f.b3 + ' · 15만 이상 ×' + f.b4 : '보정 안 함');
+    const rep = S.learn;
+    if (!rep) {
+      $('learnBody').innerHTML =
+        '<div class="mcard"><h3>담당자 수기 간트에서 배정 습관 배우기</h3><p class="hint">[수기 간트 불러오기]로 방별 수기 간트 파일을 열면 수량대별 호기 수·가공기간, 실제 일생산량, 방/작업자 분산, 방마스터 밖 배정을 뽑아 자동배정과 나란히 보여줍니다. 가공기간 보정계수를 학습값으로 바꿀 수 있습니다.</p><p class="hint">' + esc(cur) + ' (가공1팀 수기 간트 9/28~11월분 학습값이 기본)</p></div>';
+      return;
+    }
+    const plan = S.planner.drafts.length ? L.summarizePlan(S.planner) : null;
+    const cards = [];
+    cards.push(
+      '<div class="mcard"><h3>수기 간트 요약</h3><ul>' +
+        '<li>기간 <b>' + E.fmtYMD(rep.firstDate) + ' ~ ' + E.fmtYMD(rep.firstDate + rep.horizon - 1) + '</b> (' + rep.horizon + '일)</li>' +
+        '<li>작업 <b>' + nf(rep.jobs) + '</b>건 · 구간 ' + nf(rep.segments) + ' · 사용 호기 ' + nf(rep.machinesUsed) + '대</li>' +
+        '<li>현재 원본과 부품코드 일치 ' + pct(rep.matched, rep.segments) + '</li>' +
+        '<li>파일: ' + esc(rep.file || '') + '</li></ul></div>'
+    );
+    const rows = rep.bands
+      .map((b) => {
+        const p = plan && plan.bands.find((x) => x.key === b.key);
+        return (
+          '<tr><td>' + esc(b.label) + '</td><td class="num">' + b.jobs + '</td><td class="num">' + (b.machinesMed == null ? '-' : b.machinesMed + ' / ' + b.machinesMax) + '</td><td class="num">' + (b.runMed == null ? '-' : b.runMed + '일') + '</td><td class="num"><b>' + (b.ratioMed == null ? '-' : '×' + b.ratioMed) + '</b></td>' +
+          '<td class="num">' + (p ? p.jobs : '-') + '</td><td class="num">' + (p && p.machinesMed != null ? p.machinesMed + ' / ' + p.machinesMax : '-') + '</td><td class="num">' + (p && p.runMed != null ? p.runMed + '일' : '-') + '</td><td class="num">' + (S.settings.periodOn ? '×' + f[b.key] : '-') + '</td></tr>'
+        );
+      })
+      .join('');
+    const canApply = Object.keys(rep.factors).length > 0;
+    cards.push(
+      '<div class="mcard wide"><h3>수량대별 호기 수·가공기간: 수기 vs 자동</h3><p class="hint">기준대비 = 수기 장비일 ÷ 기준 장비일(6_생산성기준). 1보다 크면 담당자가 기준보다 길게 잡은 것입니다. 기간 안에서 시작·종료한 작업만 셉니다.</p>' +
+        '<div class="table-wrap"><table class="grid"><thead><tr><th>수량대</th><th class="num">수기 작업</th><th class="num">수기 호기 중앙/최대</th><th class="num">수기 가공기간</th><th class="num">기준대비</th><th class="num">자동 작업</th><th class="num">자동 호기 중앙/최대</th><th class="num">자동 가공기간</th><th class="num">적용 계수</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+        '<div class="row"><button class="btn primary small" type="button" id="learnApply"' + (canApply ? '' : ' disabled') + '>학습 계수 적용 후 다시 수립</button><span class="hint">' + esc(cur) + (canApply ? ' → 학습값 ' + Object.entries(rep.factors).map(([k, v]) => '×' + v).join(' / ') : '') + '</span></div></div>'
+    );
+    cards.push(
+      '<div class="mcard"><h3>실제 일생산량 (호기 1대·하루)</h3><div class="table-wrap"><table class="grid"><thead><tr><th>생산성분류</th><th class="num">작업</th><th class="num">기준</th><th class="num">수기 중앙</th><th class="num">하위~상위 25%</th></tr></thead><tbody>' +
+        rep.classRates.map((r) => '<tr><td>' + esc(r.prod) + '</td><td class="num">' + r.n + '</td><td class="num">' + nf(r.std) + '</td><td class="num"><b>' + nf(r.med) + '</b></td><td class="num">' + nf(r.p25) + '~' + nf(r.p75) + '</td></tr>').join('') +
+        '</tbody></table></div><p class="hint">수기 값은 셋팅·대기 일을 포함한 계획 기준입니다. 6_생산성기준을 바꿀지는 담당자가 판단하세요.</p></div>'
+    );
+    const sp = rep.spread;
+    cards.push(
+      '<div class="mcard"><h3>배정 습관</h3><ul>' +
+        '<li>여러 호기 작업 ' + sp.multiJobs + '건 중 <b>한 방 안</b>에서 편성 ' + pct(sp.oneRoom, sp.multiJobs) + (plan ? ' (자동 ' + pct(plan.oneRoom, plan.multi) + ')' : '') + '</li>' +
+        '<li>호기마다 담당작업자가 모두 다름 ' + pct(sp.distinctWorkers, sp.multiJobs) + '</li>' +
+        '<li>같은 날 동시에 시작 ' + pct(sp.sameDayStart, sp.multiJobs) + '</li>' +
+        '<li>작업자 1인 하루 신규셋팅 중앙 ' + rep.workerDay.p50 + '건 · 상위 5% ' + rep.workerDay.p95 + '건 · 최대 ' + rep.workerDay.max + '건 (현재 한도 ' + (S.settings.setupLimitPerWorkerDay || '없음') + ')</li></ul></div>'
+    );
+    const fit = rep.fit;
+    const tot = fit.t0 + fit.t1 + fit.t2 + fit.out;
+    cards.push(
+      '<div class="mcard wide"><h3>방마스터와 실제 배정</h3><p class="hint">1순위 방 ' + pct(fit.t0, tot) + ' · 소재계열만 일치 ' + pct(fit.t1, tot) + ' · 2차후보 ' + pct(fit.t2, tot) + ' · <b>방마스터 밖 ' + pct(fit.out, tot) + '</b>. 밖 배정이 많은 조합은 3_방마스터에 허용 소재/생산성을 추가할지 검토할 대상입니다.</p>' +
+        '<div class="table-wrap"><table class="grid"><thead><tr><th>실제 방</th><th>대분류</th><th>생산성분류</th><th>재질(계열)</th><th class="num">구간</th></tr></thead><tbody>' +
+        rep.outsideList.slice(0, 12).map((o) => '<tr><td>' + esc(o.room) + '</td><td>' + esc(o.main) + '</td><td>' + esc(o.prod) + '</td><td>' + esc(o.mat) + '</td><td class="num">' + o.n + '</td></tr>').join('') +
+        '</tbody></table></div>' +
+        (rep.matHints.length
+          ? '<div class="box"><h3>소재계열 매핑 제안</h3>' + rep.matHints.map((h) => '<div class="row"><span>재질 <b>' + esc(h.material) + '</b> → ' + esc(h.family) + ' 계열 방에 ' + h.n + '/' + h.total + '구간</span><button class="btn small" type="button" data-addmat="' + esc(h.material + '=' + h.family) + '"' + (E.parseMaterialMap(S.settings.matMap)[h.material] ? ' disabled' : '') + '>' + esc(h.material + '=' + h.family) + ' 추가</button></div>').join('') + '</div>'
+          : '') +
+        '</div>'
+    );
+    $('learnBody').innerHTML = '<div class="mgrid">' + cards.join('') + '</div>';
+    const ap = $('learnApply');
+    if (ap)
+      ap.onclick = () => {
+        S.settings.periodOn = true;
+        S.settings.periodFactors = Object.assign({}, S.settings.periodFactors, rep.factors);
+        store.set('cnc.settings', S.settings);
+        replan('학습 계수를 적용했습니다');
+      };
+    for (const b of document.querySelectorAll('[data-addmat]'))
+      b.onclick = () => {
+        S.settings.matMap = (S.settings.matMap ? S.settings.matMap.trim() + '\n' : '') + b.dataset.addmat;
+        store.set('cnc.settings', S.settings);
+        replan(b.dataset.addmat + ' 매핑을 추가했습니다');
+      };
+  }
+  function replan(msg) {
+    busy('기준 적용 중…', () => {
+      rebuild('manual');
+      S.planner.autoPlan();
+      saveDrafts();
+      renderAll();
+      toast(msg + ' · 자동 가배정 다시 계산');
+    });
+  }
+  function handleLearnFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () =>
+      busy('수기 간트 분석 중…', () => {
+        const first = E.toSerial($('learnFirst').value);
+        const parsed = window.CNCLearn.parseGantt(new Uint8Array(reader.result), { today, firstDate: first });
+        if (!parsed.segs.length) return toast('간트 구간을 찾지 못했습니다. 1행에 날짜(일), A열에 호기 번호가 있는 방별 시트인지 확인하세요');
+        const rep = window.CNCLearn.analyze(parsed, S.planner);
+        rep.file = file.name;
+        S.learn = rep;
+        store.set('cnc.learn', rep);
+        $('learnFirst').value = E.fmtYMD(parsed.firstDate);
+        renderAll();
+        toast('수기 간트 ' + nf(rep.jobs) + '건을 분석했습니다');
+      });
+    reader.readAsArrayBuffer(file);
+  }
+
   function renderMaster() {
     const P = S.planner;
     const m = S.model;
@@ -476,6 +586,8 @@
           ['작업자운영', m.workers.length],
           ['BD규격마스터', m.bdSpecs.length],
           ['9번 확정일정', m.confirmed.length],
+          ['프로그램 기존배정 초기이관', S.planner.initial.used ? S.planner.initial.rows.length : 0],
+          ['초기이관 제외(날짜·수량 확인)', S.planner.initial.skipped.length],
         ]
           .map(([k, v]) => '<li>' + esc(k) + ' <b>' + nf(v) + '</b></li>')
           .join('') +
@@ -497,7 +609,11 @@
       rooms.set(mc.room, r);
     }
     cards.push(
-      '<div class="mcard"><h3>방별 가배정 부하</h3><div class="table-wrap"><table class="grid"><thead><tr><th>방</th><th class="num">호기</th><th class="num">사용</th><th class="num">장비일</th><th>최종완료</th><th class="num">완료확인</th></tr></thead><tbody>' +
+      '<div class="mcard"><h3>방별 가배정 부하</h3>' +
+        ([...rooms.entries()].filter(([, r]) => r.last && r.last > today + 90).length
+          ? '<p class="hint late-text">최종완료가 3개월을 넘는 방: ' + esc([...rooms.entries()].filter(([, r]) => r.last && r.last > today + 90).map(([k, r]) => k + ' ' + E.fmtYMD(r.last)).join(', ')) + ' – 방마스터상 이 방에만 갈 수 있는 품목이 몰린 것입니다. 3_방마스터 허용 범위나 현장 학습 탭의 방마스터 밖 배정을 확인하세요.</p>'
+          : '') +
+        '<div class="table-wrap"><table class="grid"><thead><tr><th>방</th><th class="num">호기</th><th class="num">사용</th><th class="num">장비일</th><th>최종완료</th><th class="num">완료확인</th></tr></thead><tbody>' +
         [...rooms.entries()]
           .map(([k, r]) => '<tr><td>' + esc(k) + '</td><td class="num">' + r.n + '</td><td class="num">' + r.used + '</td><td class="num">' + nf(r.days) + '</td><td class="when">' + (r.last ? E.fmtMD(r.last) : '-') + '</td><td class="num">' + r.delayed + '</td></tr>')
           .join('') +
@@ -601,7 +717,7 @@
     if (!it) return closeDrawer();
     const r = P.results[it.key] || {};
     const work = P.workQty(it);
-    const days = E.daysForQty(it, work);
+    const days = P.planDays(it, work);
     $('dwEyebrow').innerHTML = statePill(it) + ' &nbsp;' + esc(it.planNo || '계획번호 없음') + ' · ' + esc(it.productCode);
     $('dwTitle').textContent = it.partCode;
     const facts = [
@@ -629,11 +745,11 @@
     if (it.note && r.late > 0) html += '<p class="hint">' + esc(it.note) + '</p>';
 
     const ds = draftsOf(it.key);
-    const confirmedRows = (S.model.confirmed || []).filter((c) => E.itemKey(c.planNo, c.productCode, c.partCode) === it.key);
+    const confirmedRows = (S.planner.model.confirmed || []).filter((c) => E.itemKey(c.planNo, c.productCode, c.partCode) === it.key);
     html += '<div class="box"><h3>현재 배정</h3>';
     if (!ds.length && !confirmedRows.length) html += '<p class="hint">배정 없음</p>';
     if (confirmedRows.length)
-      html += '<div class="alloc">' + confirmedRows.map((c) => '<span class="chip">확정 <b>' + esc(c.machine) + '</b> ' + E.fmtMD(c.start) + '~' + E.fmtMD(c.end) + ' · ' + nf(c.qty) + '</span>').join('') + '</div>';
+      html += '<div class="alloc">' + confirmedRows.map((c) => '<span class="chip">' + (c.source === 'program' ? '프로그램(초기이관)' : '확정') + ' <b>' + esc(c.machine) + '</b> ' + E.fmtMD(c.start) + '~' + E.fmtMD(c.end) + ' · ' + nf(c.qty) + '</span>').join('') + '</div>';
     if (ds.length) {
       html +=
         '<div class="table-wrap"><table class="grid edit-table"><thead><tr><th>구분</th><th>호기</th><th>방 · 담당</th><th>시작일</th><th class="num">장비일</th><th>완료일</th><th class="num">수량</th><th></th></tr></thead><tbody>' +
@@ -848,6 +964,8 @@
     $('setDelay').value = s.delayPolicy;
     $('setActualOk').value = s.requireActualOk ? '1' : '0';
     $('setMatMap').value = s.matMap;
+    $('setPeriodOn').value = s.periodOn ? '1' : '0';
+    ['b1', 'b2', 'b3', 'b4'].forEach((k, i) => ($('setPF' + (i + 1)).value = s.periodFactors[k]));
     $('dlgSettings').showModal();
   }
   function applySettings() {
@@ -871,6 +989,8 @@
       delayPolicy: $('setDelay').value,
       requireActualOk: $('setActualOk').value === '1',
       matMap: $('setMatMap').value,
+      periodOn: $('setPeriodOn').value === '1',
+      periodFactors: Object.fromEntries(['b1', 'b2', 'b3', 'b4'].map((k, i) => [k, Math.min(3, Math.max(0.2, Number($('setPF' + (i + 1)).value) || DEFAULTS.periodFactors[k]))])),
     };
     S.baseDate = base != null ? base : today + 1;
     store.set('cnc.settings', S.settings);
@@ -913,9 +1033,13 @@
     document.addEventListener('drop', (e) => {
       e.preventDefault();
       const f = e.dataTransfer && e.dataTransfer.files[0];
-      if (f) handleFile(f);
+      if (f) (S.tab === 'learn' ? handleLearnFile : handleFile)(f);
     });
     $('btnAuto').onclick = runAuto;
+    $('learnFile').addEventListener('change', (e) => {
+      handleLearnFile(e.target.files[0]);
+      e.target.value = '';
+    });
     $('btnExport').onclick = openExportDialog;
     $('btnSettings').onclick = openSettings;
     $('settingsApply').onclick = applySettings;
@@ -1043,7 +1167,7 @@
       if (e.target.id === 'dwMachines') syncPicks();
       if (e.target.id === 'dwQty') {
         const it = S.planner.itemByKey[S.openKey];
-        const d = E.daysForQty(it, Number(e.target.value));
+        const d = S.planner.planDays(it, Number(e.target.value));
         if (d) $('dwDays').value = d;
       }
     });

@@ -358,7 +358,8 @@
     const confirmedQty = {};
     for (const c of model.confirmed || []) {
       const k = itemKey(c.planNo, c.productCode, c.partCode);
-      confirmedQty[k] = (confirmedQty[k] || 0) + toNum(c.qty);
+      // v670: 확정수량은 누적실적을 뺀 잔량으로 본다
+      confirmedQty[k] = (confirmedQty[k] || 0) + Math.max(0, toNum(c.qty) - toNum(c.actualQty));
     }
     const classCache = {};
     const items = [];
@@ -368,10 +369,13 @@
       const ck = up(partCode);
       const cls = classCache[ck] || (classCache[ck] = classifyPart(partCode, rules));
       const qty = toNum(r.qty);
+      const received = toNum(r.received);
+      // v670 배정대상수량: 발주량 - 입고누계, 발주량이 없으면 필요수량
+      const openQty = qty > 0 ? Math.max(0, qty - received) : Math.max(0, toNum(r.need));
       const pd = prodDict[up(cls.prod).replace(/\s/g, '')];
       let daily = pd ? pd.daily : 0;
       let machineDays = 0;
-      if (daily > 0 && qty > 0) machineDays = Math.ceil(qty / daily) + (pd ? pd.buffer : 0);
+      if (daily > 0 && openQty > 0) machineDays = Math.ceil(openQty / daily) + (pd ? pd.buffer : 0);
       const due = r.reqDate != null ? r.reqDate : null;
       let availDays = 1;
       if (due != null) availDays = Math.max(1, due - baseDate + 1);
@@ -388,7 +392,8 @@
       const key = itemKey(r.planNo, r.productCode, partCode);
       const cq = confirmedQty[key] || 0;
       let status = '대상';
-      if (qty > 0 && cq > 0) status = cq < qty ? '추가배정' : cq === qty ? '배정완료' : '배정초과';
+      if (openQty > 0 && cq > 0) status = cq < openQty ? '추가배정' : cq === openQty ? '배정완료' : '배정초과';
+      else if (qty > 0 && openQty <= 0) status = '입고완료';
       items.push({
         id: idx,
         key,
@@ -414,7 +419,12 @@
         note,
         refMachines: r.refMachines || [],
         confirmedQty: cq,
-        remainQty: Math.max(0, qty - cq),
+        received,
+        openQty,
+        orderDate: r.orderDate != null ? r.orderDate : null,
+        progStart: r.progStart != null ? r.progStart : null,
+        progEnd: r.progEnd != null ? r.progEnd : null,
+        remainQty: Math.max(0, openQty - cq),
         status,
       });
     });
@@ -432,6 +442,11 @@
     if (isNumLike(v)) return toNum(v);
     const s = up(v).replace(/\s/g, '');
     return s === 'Y' || s === 'YES' || s === 'TRUE' || s === '1' ? 1 : 0;
+  }
+
+  /** 수량대 (현장 학습 가공기간 보정 단위): b1 <1만, b2 <5만, b3 <15만, b4 그 이상 */
+  function qtyBand(qty) {
+    return qty < 10000 ? 'b1' : qty < 50000 ? 'b2' : qty < 150000 ? 'b3' : 'b4';
   }
 
   /** 잔량 기준 필요 장비일수. */
@@ -681,6 +696,17 @@
       this.opts = opts;
       this.today = opts.today || todaySerial();
       this.baseDate = opts.baseDate != null ? opts.baseDate : this.today + 1;
+      // v670 초기일정이관: 9번 확정일정이 하나도 없으면 원본의 설비1~A + 개시/완료를 현행 일정으로 쓴다
+      this.initial = { used: false, rows: [], skipped: [] };
+      if (!(model.confirmed || []).length && opts.useProgramAssignments !== false) {
+        const pre = buildItems(model, { baseDate: this.baseDate, materialMap: opts.materialMap });
+        const init = programAssignments(pre);
+        if (init.rows.length) {
+          this.initial = { used: true, rows: init.rows, skipped: init.skipped };
+          model = Object.assign({}, model, { confirmed: init.rows });
+          this.model = model;
+        } else this.initial.skipped = init.skipped;
+      }
       this.items = buildItems(model, { baseDate: this.baseDate, materialMap: opts.materialMap });
       this.itemByKey = {};
       for (const it of this.items) if (it.dupOf == null) this.itemByKey[it.key] = it;
@@ -768,6 +794,17 @@
       return s;
     }
 
+    /**
+     * 계획용 장비일수: 기준 장비일수(6_생산성기준)에 현장 학습 보정계수(수량대별)를 곱한다.
+     * opts.periodFactors가 없으면 기준값 그대로.
+     */
+    planDays(item, qty) {
+      const base = daysForQty(item, qty);
+      const f = this.opts.periodFactors && this.opts.periodFactors[qtyBand(qty)];
+      if (!base || !(f > 0)) return base;
+      return Math.max(1, Math.round(base * f));
+    }
+
     // 품목별 기존확정 + 가배정 수량
     draftQty(key) {
       let q = 0;
@@ -775,7 +812,7 @@
       return q;
     }
     workQty(item) {
-      return Math.max(0, item.qty - item.confirmedQty - this.draftQty(item.key));
+      return Math.max(0, item.openQty - item.confirmedQty - this.draftQty(item.key));
     }
     assignedMachines(item) {
       const set = new Set();
@@ -790,7 +827,8 @@
       if (item.dupOf != null) return '중복행(동일 계획/제품/부품)';
       if (item.main === 'BG') return 'BG 전용품 - 수기배정 (' + item.note + ')';
       if (!['PL', 'TE', 'BD'].includes(item.main)) return '대분류 ' + item.main + ' - 자동추천 미지원 대분류';
-      if (!(item.qty > 0)) return '발주량 확인 필요';
+      if (item.status === '입고완료') return '입고완료 - 미납잔량 없음';
+      if (!(item.openQty > 0)) return '발주량 확인 필요';
       if (!(item.daily > 0)) return '생산성기준 미등록 (' + item.prod + ') - 6_생산성기준 확인';
       return '';
     }
@@ -1130,7 +1168,7 @@
       for (const k of Object.keys(this.results)) if (this.results[k].decision !== '수기가배정') delete this.results[k];
     }
 
-    /** 자동배정 우선순위: 특별관리 → 납기 빠른 순 → 장비일수 큰 순. */
+    /** 자동배정 우선순위: 특별관리 → 요청일 빠른 순 → (요청일 없으면) 발주일 빠른 순 → 장비일수 큰 순. */
     queue() {
       const list = this.items.filter((it) => it.dupOf == null && this.workQty(it) > 0);
       return list.sort((a, b) => {
@@ -1140,6 +1178,9 @@
         const da = a.due == null ? 1e9 : a.due;
         const db = b.due == null ? 1e9 : b.due;
         if (da !== db) return da - db;
+        const oa = a.orderDate == null ? 1e9 : a.orderDate;
+        const ob = b.orderDate == null ? 1e9 : b.orderDate;
+        if (oa !== ob) return oa - ob;
         return b.machineDays - a.machineDays;
       });
     }
@@ -1231,7 +1272,7 @@
       if (block) return (this.results[item.key] = { decision: '수기검토', reason: block });
       const qty = this.workQty(item);
       if (qty <= 0) return (this.results[item.key] = { decision: '배정완료', reason: '' });
-      const days = daysForQty(item, qty);
+      const days = this.planDays(item, qty);
       const from = this.baseDate;
       const q = this.candidates(item, { from });
       const cands = q.candidates;
@@ -1296,7 +1337,7 @@
     /** 수기 가배정: 담당자가 고른 호기로 잔량 배분. */
     manualAssign(item, machines, opts) {
       const qty = opts && opts.qty > 0 ? Math.min(opts.qty, this.workQty(item) || opts.qty) : this.workQty(item);
-      const days = opts && opts.days > 0 ? opts.days : daysForQty(item, qty) || 1;
+      const days = opts && opts.days > 0 ? opts.days : this.planDays(item, qty) || 1;
       const allocs = this.allocate(machines, qty, days, opts && opts.from, item.partCode);
       if (!allocs) return null;
       this.addDrafts(item, allocs, { auto: false, manual: true });
@@ -1413,6 +1454,7 @@
       const dq = this.draftQty(item.key);
       if (item.dupOf != null) return { label: '중복행', cls: 'muted' };
       if (item.status === '배정완료' && !dq) return { label: '배정완료', cls: 'done' };
+      if (item.status === '입고완료') return { label: '입고완료', cls: 'done' };
       if (item.status === '배정초과') return { label: '배정초과', cls: 'bad' };
       if (dq > 0) {
         const left = this.workQty(item);
@@ -1431,7 +1473,7 @@
         if (it.dupOf != null) continue;
         s.items++;
         const st = this.itemState(it).label;
-        if (st === '배정완료' || st === '배정초과') s.done++;
+        if (st === '배정완료' || st === '배정초과' || st === '입고완료') s.done++;
         else if (st === '가배정') s.draft++;
         else if (st === '가배정(지연)') {
           s.draft++;
@@ -1445,9 +1487,12 @@
       return s;
     }
 
-    /** 9_설비배정_확정 형식 행 (가배정 → 확정 붙여넣기용). */
+    /** 9_설비배정_확정 형식 행 (가배정 → 확정 붙여넣기용). 초기이관을 쓴 경우 그 행을 앞에 붙인다. */
     confirmRows() {
       const rows = [];
+      if (this.initial.used)
+        for (const c of this.initial.rows)
+          rows.push({ planNo: c.planNo, productCode: c.productCode, partCode: c.partCode, machine: Number(c.machine), start: c.start, end: c.end, qty: c.qty, newSetup: 'Y', worker: this.workerByMachine[c.machine] || '', note: c.note, initial: true });
       const sorted = this.drafts.slice().sort((a, b) => a.start - b.start || Number(a.machine) - Number(b.machine));
       for (const d of sorted) {
         const worker = this.workerByMachine[d.machine] || '';
@@ -1507,6 +1552,44 @@
       for (const [k, v] of Object.entries(state.results || {})) if (this.itemByKey[k]) this.results[k] = v;
       return n;
     }
+  }
+
+  /**
+   * 일정관리 프로그램 기존 배정(설비1~A + 개시/완료) → 확정일정 행 (v670 BuildInitialImportPreview).
+   * 미납잔량을 호기 수로 균등분할. 개시가 없으면 완료일 하루, 날짜가 없거나 개시>완료이면 제외(skipped).
+   */
+  function programAssignments(items) {
+    const rows = [];
+    const skipped = [];
+    for (const it of items) {
+      if (it.dupOf != null || !it.refMachines || !it.refMachines.length) continue;
+      const ms = [...new Set(it.refMachines.filter((m) => /^\d+$/.test(m) && Number(m) > 0))];
+      if (!ms.length) continue;
+      let s = it.progStart;
+      const e = it.progEnd;
+      if (s == null && e != null) s = e;
+      if (s == null || e == null || s > e || !(it.openQty > 0)) {
+        skipped.push({ planNo: it.planNo, partCode: it.partCode, machines: ms, reason: !(it.openQty > 0) ? '미납잔량 없음' : s == null || e == null ? '개시/완료일 없음' : '개시일이 완료일보다 늦음' });
+        continue;
+      }
+      const total = Math.round(it.openQty);
+      const base = Math.floor(total / ms.length);
+      ms.forEach((m, i) => {
+        rows.push({
+          planNo: it.planNo,
+          productCode: it.productCode,
+          partCode: it.partCode,
+          machine: m,
+          start: s,
+          end: e,
+          qty: base + (i < total - base * ms.length ? 1 : 0),
+          actualQty: 0,
+          note: '초기이관/미납잔량 ' + total.toLocaleString('ko-KR') + (ms.length > 1 ? '/수량균등분할' + ms.length + '대' : ''),
+          source: 'program',
+        });
+      });
+    }
+    return { rows, skipped };
   }
 
   function distributeQtyHundreds(totalQty, allocDays) {
@@ -1585,9 +1668,11 @@
     lookupBDSpec,
     parseBGCode,
     daysForQty,
+    qtyBand,
     distributeQtyHundreds,
     opPriority,
     buildItems,
+    programAssignments,
     Timeline,
     Planner,
   };

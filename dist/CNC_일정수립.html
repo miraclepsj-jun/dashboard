@@ -293,6 +293,9 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .edit-table .actions-cell { display: flex; gap: 4px; }
 .late-box { border-color: var(--late); background: var(--late-soft); }
 .late-text { color: var(--late); font-weight: 600; }
+.mcard.wide { grid-column: 1 / -1; }
+#learnFirst { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.mcard { align-content: start; }
 </style>
 
 </head>
@@ -332,6 +335,7 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
     <button role="tab" class="tab" data-tab="gantt" aria-selected="false" id="tab-gantt">간트차트</button>
     <button role="tab" class="tab" data-tab="review" aria-selected="false" id="tab-review">수기검토 <span class="count" id="reviewCount"></span></button>
     <button role="tab" class="tab" data-tab="master" aria-selected="false" id="tab-master">기준 점검</button>
+    <button role="tab" class="tab" data-tab="learn" aria-selected="false" id="tab-learn">현장 학습</button>
   </nav>
 
   <main>
@@ -375,6 +379,17 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 
     <section class="panel" id="panel-review" hidden>
       <div class="review" id="reviewList"></div>
+    </section>
+
+    <section class="panel" id="panel-learn" hidden>
+      <div class="toolbar">
+        <label class="btn" for="learnFile">수기 간트 불러오기 (.xlsx)</label>
+        <input type="file" id="learnFile" accept=".xlsx,.xlsm,.xls" hidden>
+        <label class="check" for="learnFirst">첫 날짜 칸</label>
+        <input type="date" id="learnFirst" aria-label="수기 간트 첫 날짜">
+        <span class="hint">방별 시트(행=호기, 열=날짜, 시작칸에 "부품코드/수량K(같이 도는 호기)" + 색칠 구간)를 읽습니다. 날짜 칸에는 "일"만 있으므로 첫 칸 날짜가 다르면 직접 입력하세요.</span>
+      </div>
+      <div class="master" id="learnBody"></div>
     </section>
 
     <section class="panel" id="panel-master" hidden>
@@ -433,6 +448,12 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
       <select id="setDelay"><option value="block">완료확인 전 신규배정 금지 (기존 방식)</option><option value="assumeDone">계획완료일에 끝난 것으로 간주</option></select>
       <label for="setActualOk">완료 판정에 실적확인=Y 필요</label>
       <select id="setActualOk"><option value="0">아니오 (누적실적 ≥ 계획수량)</option><option value="1">예</option></select>
+      <label for="setPeriodOn">가공기간 보정 (현장 학습)</label>
+      <select id="setPeriodOn"><option value="1">적용 – 기준 장비일수 × 수량대별 계수</option><option value="0">적용 안 함 – 6_생산성기준 그대로</option></select>
+      <label for="setPF1">보정계수 1만 미만 / 1만~5만</label>
+      <div class="row"><input type="number" id="setPF1" min="0.2" max="3" step="0.05"><input type="number" id="setPF2" min="0.2" max="3" step="0.05"></div>
+      <label for="setPF3">보정계수 5만~15만 / 15만 이상</label>
+      <div class="row"><input type="number" id="setPF3" min="0.2" max="3" step="0.05"><input type="number" id="setPF4" min="0.2" max="3" step="0.05"></div>
       <label for="setMatMap">추가 소재계열 매핑</label>
       <textarea id="setMatMap" rows="3" spellcheck="false" placeholder="H5J=TK&#10;C3604=BECU"></textarea>
     </div>
@@ -830,7 +851,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     const confirmedQty = {};
     for (const c of model.confirmed || []) {
       const k = itemKey(c.planNo, c.productCode, c.partCode);
-      confirmedQty[k] = (confirmedQty[k] || 0) + toNum(c.qty);
+      // v670: 확정수량은 누적실적을 뺀 잔량으로 본다
+      confirmedQty[k] = (confirmedQty[k] || 0) + Math.max(0, toNum(c.qty) - toNum(c.actualQty));
     }
     const classCache = {};
     const items = [];
@@ -840,10 +862,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const ck = up(partCode);
       const cls = classCache[ck] || (classCache[ck] = classifyPart(partCode, rules));
       const qty = toNum(r.qty);
+      const received = toNum(r.received);
+      // v670 배정대상수량: 발주량 - 입고누계, 발주량이 없으면 필요수량
+      const openQty = qty > 0 ? Math.max(0, qty - received) : Math.max(0, toNum(r.need));
       const pd = prodDict[up(cls.prod).replace(/\s/g, '')];
       let daily = pd ? pd.daily : 0;
       let machineDays = 0;
-      if (daily > 0 && qty > 0) machineDays = Math.ceil(qty / daily) + (pd ? pd.buffer : 0);
+      if (daily > 0 && openQty > 0) machineDays = Math.ceil(openQty / daily) + (pd ? pd.buffer : 0);
       const due = r.reqDate != null ? r.reqDate : null;
       let availDays = 1;
       if (due != null) availDays = Math.max(1, due - baseDate + 1);
@@ -860,7 +885,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const key = itemKey(r.planNo, r.productCode, partCode);
       const cq = confirmedQty[key] || 0;
       let status = '대상';
-      if (qty > 0 && cq > 0) status = cq < qty ? '추가배정' : cq === qty ? '배정완료' : '배정초과';
+      if (openQty > 0 && cq > 0) status = cq < openQty ? '추가배정' : cq === openQty ? '배정완료' : '배정초과';
+      else if (qty > 0 && openQty <= 0) status = '입고완료';
       items.push({
         id: idx,
         key,
@@ -886,7 +912,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         note,
         refMachines: r.refMachines || [],
         confirmedQty: cq,
-        remainQty: Math.max(0, qty - cq),
+        received,
+        openQty,
+        orderDate: r.orderDate != null ? r.orderDate : null,
+        progStart: r.progStart != null ? r.progStart : null,
+        progEnd: r.progEnd != null ? r.progEnd : null,
+        remainQty: Math.max(0, openQty - cq),
         status,
       });
     });
@@ -904,6 +935,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     if (isNumLike(v)) return toNum(v);
     const s = up(v).replace(/\s/g, '');
     return s === 'Y' || s === 'YES' || s === 'TRUE' || s === '1' ? 1 : 0;
+  }
+
+  /** 수량대 (현장 학습 가공기간 보정 단위): b1 <1만, b2 <5만, b3 <15만, b4 그 이상 */
+  function qtyBand(qty) {
+    return qty < 10000 ? 'b1' : qty < 50000 ? 'b2' : qty < 150000 ? 'b3' : 'b4';
   }
 
   /** 잔량 기준 필요 장비일수. */
@@ -1153,6 +1189,17 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       this.opts = opts;
       this.today = opts.today || todaySerial();
       this.baseDate = opts.baseDate != null ? opts.baseDate : this.today + 1;
+      // v670 초기일정이관: 9번 확정일정이 하나도 없으면 원본의 설비1~A + 개시/완료를 현행 일정으로 쓴다
+      this.initial = { used: false, rows: [], skipped: [] };
+      if (!(model.confirmed || []).length && opts.useProgramAssignments !== false) {
+        const pre = buildItems(model, { baseDate: this.baseDate, materialMap: opts.materialMap });
+        const init = programAssignments(pre);
+        if (init.rows.length) {
+          this.initial = { used: true, rows: init.rows, skipped: init.skipped };
+          model = Object.assign({}, model, { confirmed: init.rows });
+          this.model = model;
+        } else this.initial.skipped = init.skipped;
+      }
       this.items = buildItems(model, { baseDate: this.baseDate, materialMap: opts.materialMap });
       this.itemByKey = {};
       for (const it of this.items) if (it.dupOf == null) this.itemByKey[it.key] = it;
@@ -1240,6 +1287,17 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       return s;
     }
 
+    /**
+     * 계획용 장비일수: 기준 장비일수(6_생산성기준)에 현장 학습 보정계수(수량대별)를 곱한다.
+     * opts.periodFactors가 없으면 기준값 그대로.
+     */
+    planDays(item, qty) {
+      const base = daysForQty(item, qty);
+      const f = this.opts.periodFactors && this.opts.periodFactors[qtyBand(qty)];
+      if (!base || !(f > 0)) return base;
+      return Math.max(1, Math.round(base * f));
+    }
+
     // 품목별 기존확정 + 가배정 수량
     draftQty(key) {
       let q = 0;
@@ -1247,7 +1305,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       return q;
     }
     workQty(item) {
-      return Math.max(0, item.qty - item.confirmedQty - this.draftQty(item.key));
+      return Math.max(0, item.openQty - item.confirmedQty - this.draftQty(item.key));
     }
     assignedMachines(item) {
       const set = new Set();
@@ -1262,7 +1320,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       if (item.dupOf != null) return '중복행(동일 계획/제품/부품)';
       if (item.main === 'BG') return 'BG 전용품 - 수기배정 (' + item.note + ')';
       if (!['PL', 'TE', 'BD'].includes(item.main)) return '대분류 ' + item.main + ' - 자동추천 미지원 대분류';
-      if (!(item.qty > 0)) return '발주량 확인 필요';
+      if (item.status === '입고완료') return '입고완료 - 미납잔량 없음';
+      if (!(item.openQty > 0)) return '발주량 확인 필요';
       if (!(item.daily > 0)) return '생산성기준 미등록 (' + item.prod + ') - 6_생산성기준 확인';
       return '';
     }
@@ -1602,7 +1661,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       for (const k of Object.keys(this.results)) if (this.results[k].decision !== '수기가배정') delete this.results[k];
     }
 
-    /** 자동배정 우선순위: 특별관리 → 납기 빠른 순 → 장비일수 큰 순. */
+    /** 자동배정 우선순위: 특별관리 → 요청일 빠른 순 → (요청일 없으면) 발주일 빠른 순 → 장비일수 큰 순. */
     queue() {
       const list = this.items.filter((it) => it.dupOf == null && this.workQty(it) > 0);
       return list.sort((a, b) => {
@@ -1612,6 +1671,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         const da = a.due == null ? 1e9 : a.due;
         const db = b.due == null ? 1e9 : b.due;
         if (da !== db) return da - db;
+        const oa = a.orderDate == null ? 1e9 : a.orderDate;
+        const ob = b.orderDate == null ? 1e9 : b.orderDate;
+        if (oa !== ob) return oa - ob;
         return b.machineDays - a.machineDays;
       });
     }
@@ -1703,7 +1765,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       if (block) return (this.results[item.key] = { decision: '수기검토', reason: block });
       const qty = this.workQty(item);
       if (qty <= 0) return (this.results[item.key] = { decision: '배정완료', reason: '' });
-      const days = daysForQty(item, qty);
+      const days = this.planDays(item, qty);
       const from = this.baseDate;
       const q = this.candidates(item, { from });
       const cands = q.candidates;
@@ -1768,7 +1830,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     /** 수기 가배정: 담당자가 고른 호기로 잔량 배분. */
     manualAssign(item, machines, opts) {
       const qty = opts && opts.qty > 0 ? Math.min(opts.qty, this.workQty(item) || opts.qty) : this.workQty(item);
-      const days = opts && opts.days > 0 ? opts.days : daysForQty(item, qty) || 1;
+      const days = opts && opts.days > 0 ? opts.days : this.planDays(item, qty) || 1;
       const allocs = this.allocate(machines, qty, days, opts && opts.from, item.partCode);
       if (!allocs) return null;
       this.addDrafts(item, allocs, { auto: false, manual: true });
@@ -1885,6 +1947,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const dq = this.draftQty(item.key);
       if (item.dupOf != null) return { label: '중복행', cls: 'muted' };
       if (item.status === '배정완료' && !dq) return { label: '배정완료', cls: 'done' };
+      if (item.status === '입고완료') return { label: '입고완료', cls: 'done' };
       if (item.status === '배정초과') return { label: '배정초과', cls: 'bad' };
       if (dq > 0) {
         const left = this.workQty(item);
@@ -1903,7 +1966,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         if (it.dupOf != null) continue;
         s.items++;
         const st = this.itemState(it).label;
-        if (st === '배정완료' || st === '배정초과') s.done++;
+        if (st === '배정완료' || st === '배정초과' || st === '입고완료') s.done++;
         else if (st === '가배정') s.draft++;
         else if (st === '가배정(지연)') {
           s.draft++;
@@ -1917,9 +1980,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       return s;
     }
 
-    /** 9_설비배정_확정 형식 행 (가배정 → 확정 붙여넣기용). */
+    /** 9_설비배정_확정 형식 행 (가배정 → 확정 붙여넣기용). 초기이관을 쓴 경우 그 행을 앞에 붙인다. */
     confirmRows() {
       const rows = [];
+      if (this.initial.used)
+        for (const c of this.initial.rows)
+          rows.push({ planNo: c.planNo, productCode: c.productCode, partCode: c.partCode, machine: Number(c.machine), start: c.start, end: c.end, qty: c.qty, newSetup: 'Y', worker: this.workerByMachine[c.machine] || '', note: c.note, initial: true });
       const sorted = this.drafts.slice().sort((a, b) => a.start - b.start || Number(a.machine) - Number(b.machine));
       for (const d of sorted) {
         const worker = this.workerByMachine[d.machine] || '';
@@ -1979,6 +2045,44 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       for (const [k, v] of Object.entries(state.results || {})) if (this.itemByKey[k]) this.results[k] = v;
       return n;
     }
+  }
+
+  /**
+   * 일정관리 프로그램 기존 배정(설비1~A + 개시/완료) → 확정일정 행 (v670 BuildInitialImportPreview).
+   * 미납잔량을 호기 수로 균등분할. 개시가 없으면 완료일 하루, 날짜가 없거나 개시>완료이면 제외(skipped).
+   */
+  function programAssignments(items) {
+    const rows = [];
+    const skipped = [];
+    for (const it of items) {
+      if (it.dupOf != null || !it.refMachines || !it.refMachines.length) continue;
+      const ms = [...new Set(it.refMachines.filter((m) => /^\d+$/.test(m) && Number(m) > 0))];
+      if (!ms.length) continue;
+      let s = it.progStart;
+      const e = it.progEnd;
+      if (s == null && e != null) s = e;
+      if (s == null || e == null || s > e || !(it.openQty > 0)) {
+        skipped.push({ planNo: it.planNo, partCode: it.partCode, machines: ms, reason: !(it.openQty > 0) ? '미납잔량 없음' : s == null || e == null ? '개시/완료일 없음' : '개시일이 완료일보다 늦음' });
+        continue;
+      }
+      const total = Math.round(it.openQty);
+      const base = Math.floor(total / ms.length);
+      ms.forEach((m, i) => {
+        rows.push({
+          planNo: it.planNo,
+          productCode: it.productCode,
+          partCode: it.partCode,
+          machine: m,
+          start: s,
+          end: e,
+          qty: base + (i < total - base * ms.length ? 1 : 0),
+          actualQty: 0,
+          note: '초기이관/미납잔량 ' + total.toLocaleString('ko-KR') + (ms.length > 1 ? '/수량균등분할' + ms.length + '대' : ''),
+          source: 'program',
+        });
+      });
+    }
+    return { rows, skipped };
   }
 
   function distributeQtyHundreds(totalQty, allocDays) {
@@ -2057,9 +2161,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     lookupBDSpec,
     parseBGCode,
     daysForQty,
+    qtyBand,
     distributeQtyHundreds,
     opPriority,
     buildItems,
+    programAssignments,
     Timeline,
     Planner,
   };
@@ -2120,11 +2226,14 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const idx = row.findIndex((v) => norm(v) === norm(keyHeader));
       if (idx >= 0) {
         const map = {};
+        const all = {};
         row.forEach((v, c) => {
           const k = norm(v);
-          if (k && map[k] == null) map[k] = c;
+          if (!k) return;
+          if (map[k] == null) map[k] = c;
+          (all[k] = all[k] || []).push(c);
         });
-        return { map, start: r + 1 };
+        return { map, all, start: r + 1 };
       }
     }
     return null;
@@ -2140,7 +2249,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   // ───────────── 원본(일정관리 프로그램 복사분) ─────────────
   // 헤더가 없을 때 쓰는 고정 위치 (기존 매크로: E/G/H/I/L/O/S/AS/AT, 설비1~A = AF~AO)
-  const RAW_FIXED = { planNo: 4, productCode: 6, partCode: 7, qty: 8, reqDate: 11, h2: 14, workArea: 18, schedule: 19, material: 44, special: 45, eq: [31, 32, 33, 34, 35, 36, 37, 38, 39, 40] };
+  // 입고량 K/AB, 필요수량 U, 개시 P, 완료 Q, 종료 R (v670 초기이관·미납잔량 기준)
+  const RAW_FIXED = { orderDate: 2, planNo: 4, productCode: 6, partCode: 7, qty: 8, received: [10, 27], need: 20, open: 15, finish: 16, close: 17, reqDate: 11, h2: 14, workArea: 18, schedule: 19, material: 44, special: 45, eq: [31, 32, 33, 34, 35, 36, 37, 38, 39, 40] };
 
   function rawColumns(rows) {
     const hm = headerMap(rows, '부품코드');
@@ -2150,10 +2260,16 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return {
       start: hm.start,
       cols: {
+        orderDate: col(hm, '발주일', '발주일자'),
         planNo: col(hm, '계획번호'),
         productCode: col(hm, '제품코드'),
         partCode: col(hm, '부품코드'),
         qty: col(hm, '발주량', '발주수량', '수량'),
+        received: hm.all[norm('입고량')] || [],
+        need: col(hm, '필요수량'),
+        open: col(hm, '개시'),
+        finish: col(hm, '완료'),
+        close: col(hm, '종료'),
         reqDate: col(hm, '요청일', '납기', '납기일'),
         h2: col(hm, 'H2치수'),
         workArea: col(hm, '작업장'),
@@ -2182,7 +2298,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         productCode,
         partCode,
         qty: toNum(at(row, cols.qty)),
+        // 입고누계: 입고량 열이 둘(K/AB)이면 큰 값 (v670 RawReceivedQty)
+        received: Math.max(0, ...cols.received.map((c) => toNum(at(row, c)))),
+        need: toNum(at(row, cols.need)),
+        progStart: toSerial(at(row, cols.open)),
+        progEnd: toSerial(at(row, cols.finish)) != null ? toSerial(at(row, cols.finish)) : toSerial(at(row, cols.close)),
         reqDate: toSerial(at(row, cols.reqDate)),
+        orderDate: toSerial(at(row, cols.orderDate)),
         h2: at(row, cols.h2),
         workArea: str(at(row, cols.workArea)),
         schedule: str(at(row, cols.schedule)),
@@ -2674,6 +2796,342 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   return { build };
 });
 </script>
+<script>/*
+ * 현장 수기 간트 학습.
+ * 담당자가 방별 시트에 직접 그린 간트(행=호기, 열=날짜, 시작칸에 "부품코드/수량K(같이 도는 호기)" + 색칠 구간)를 읽어
+ * 실제 배정 습관(호기 수, 가공기간, 방/작업자 분산, 방마스터 밖 배정)을 수치로 뽑고
+ * 자동배정에 쓸 수량대별 가공기간 보정계수와 기준 보완 제안을 만든다.
+ */
+(function (root, factory) {
+  const api = factory(root);
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  else root.CNCLearn = api;
+})(typeof self !== 'undefined' ? self : this, function (root) {
+  'use strict';
+  const E = typeof module === 'object' && module.exports ? require('./engine.js') : root.CNCEngine;
+  const getXLSX = () => (root && root.XLSX) || (typeof require === 'function' ? require('xlsx') : null);
+  const { up, str } = E;
+
+  // 수량대 (보정계수 단위)
+  const BANDS = [
+    { key: 'b1', label: '1만 개 미만', max: 10000 },
+    { key: 'b2', label: '1만~5만', max: 50000 },
+    { key: 'b3', label: '5만~15만', max: 150000 },
+    { key: 'b4', label: '15만 이상', max: Infinity },
+  ];
+  // 가공1팀 수기 간트(2026-09-28~11월) 학습값: 수기 장비일 ÷ 기준 장비일의 중앙값
+  const DEFAULT_FACTORS = { b1: 0.5, b2: 1.4, b3: 1.45, b4: 1.2 };
+  function bandOf(qty) {
+    const k = E.qtyBand(qty);
+    return BANDS.find((b) => b.key === k);
+  }
+
+  function fillKey(s) {
+    if (!s || !s.patternType || s.patternType === 'none') return null;
+    const fg = s.fgColor || {};
+    if (fg.theme != null) return 't' + fg.theme + ':' + Math.round((fg.tint || 0) * 100);
+    if (fg.rgb) return 'r' + fg.rgb;
+    if (fg.indexed != null && fg.indexed !== 64) return 'i' + fg.indexed;
+    return null;
+  }
+
+  /** "TEGX4376AM-DGP/640K(519.529.535)(~11/19)" → {part, qty, group, note} */
+  function parseLabel(text) {
+    let grp = null;
+    const notes = [];
+    for (const g of String(text).match(/\(([^()]*)\)/g) || []) {
+      const inner = g.slice(1, -1);
+      if ((/^[0-9.\s,/]+$/.test(inner) && inner.includes('.')) || /^\s*\d{1,3}\s*$/.test(inner)) grp = inner;
+      else notes.push(inner);
+    }
+    const core = String(text).replace(/\([^()]*\)/g, '').trim();
+    const m = core.match(/^([A-Za-z0-9][A-Za-z0-9\-._ ]*?)\s*(?:\/\s*([0-9.,]+)\s*([Kk]?))?\s*$/);
+    if (!m) return null;
+    const out = { part: up(m[1]) };
+    if (m[2]) {
+      const v = parseFloat(m[2].replace(/,/g, '').replace(/\.+$/, ''));
+      if (isFinite(v)) out.qty = m[3] || v < 1000 ? Math.round(v * 1000) : v;
+    }
+    if (grp) out.group = grp.split(/[.\s,/]+/).filter((x) => /^\d+$/.test(x)).map(Number);
+    if (notes.length) out.note = notes.join(' ');
+    return out;
+  }
+
+  /** 첫 날짜 칸의 "일"만 있으므로 기준일(today)에 가장 가까운 연·월로 추정한다. */
+  function guessFirstDate(day, today) {
+    const t = E.dateFromSerial(today);
+    let best = null;
+    for (let dm = -2; dm <= 1; dm++) {
+      const d = new Date(t.getFullYear(), t.getMonth() + dm, day);
+      if (d.getDate() !== day) continue;
+      const s = E.serialFromDate(d);
+      if (best == null || Math.abs(s - today) < Math.abs(best - today)) best = s;
+    }
+    return best;
+  }
+
+  /**
+   * 수기 간트 통합문서 → 작업 구간 목록.
+   * opts.firstDate: 첫 날짜 칸의 실제 날짜(엑셀 일련번호). 없으면 today 기준 추정.
+   */
+  function parseGantt(data, opts) {
+    opts = opts || {};
+    const XLSX = getXLSX();
+    const wb = data && data.SheetNames ? data : XLSX.read(data, { type: data instanceof ArrayBuffer || ArrayBuffer.isView(data) ? 'array' : 'buffer', cellStyles: true });
+    const today = opts.today || E.todaySerial();
+    const segs = [];
+    const machines = [];
+    let firstDate = opts.firstDate || null;
+    let horizon = 0;
+    for (const name of wb.SheetNames) {
+      const ws = wb.Sheets[name];
+      if (!ws || !ws['!ref']) continue;
+      const range = XLSX.utils.decode_range(ws['!ref']);
+      const cell = (r, c) => ws[XLSX.utils.encode_cell({ r, c })];
+      // 머리행(1행)의 1~31 숫자 칸 중 연속된 날짜 구간만 사용
+      const cols = [];
+      let prev = null;
+      for (let c = 0; c <= range.e.c; c++) {
+        const h = cell(0, c);
+        const v = h && typeof h.v === 'number' && Number.isInteger(h.v) && h.v >= 1 && h.v <= 31 ? h.v : null;
+        if (v == null) {
+          if (cols.length) break;
+          continue;
+        }
+        if (prev != null && !(v === prev + 1 || (v === 1 && prev >= 28))) break;
+        cols.push(c);
+        prev = v;
+      }
+      if (cols.length < 5) continue;
+      if (firstDate == null) firstDate = guessFirstDate(cell(0, cols[0]).v, today);
+      horizon = Math.max(horizon, cols.length);
+      const headNames = [];
+      for (let c = 1; c < cols[0]; c++) headNames.push(str(cell(0, c) && cell(0, c).v));
+      for (let r = 1; r <= range.e.r; r++) {
+        const a = cell(r, 0);
+        if (!a || typeof a.v !== 'number' || a.v <= 0) continue;
+        const m = String(Math.trunc(a.v));
+        const info = {};
+        headNames.forEach((h, i) => {
+          const x = cell(r, i + 1);
+          if (h && x && x.v != null && str(x.v) !== '') info[h] = str(x.v);
+        });
+        machines.push(Object.assign({ sheet: name, machine: m }, info));
+        let cur = null;
+        const close = () => {
+          if (cur) segs.push(cur);
+          cur = null;
+        };
+        cols.forEach((c, i) => {
+          const x = cell(r, c);
+          const text = x && x.v != null ? str(x.v) : '';
+          const fk = x ? fillKey(x.s) : null;
+          if (text) {
+            close();
+            cur = { sheet: name, machine: m, label: text, start: i, end: i, fill: fk, cont: false };
+          } else if (fk && cur && fk === cur.fill && cur.end === i - 1) cur.end = i;
+          else if (fk && !cur && i === 0) cur = { sheet: name, machine: m, label: '', start: 0, end: 0, fill: fk, cont: true };
+          else if (cur && fk !== cur.fill) close();
+        });
+        close();
+      }
+    }
+    for (const s of segs) {
+      s.days = s.end - s.start + 1;
+      s.startDate = firstDate + s.start;
+      s.endDate = firstDate + s.end;
+      if (s.label) Object.assign(s, parseLabel(s.label) || {});
+    }
+    return { segs, machines, firstDate, horizon };
+  }
+
+  const med = (a) => {
+    if (!a.length) return null;
+    const b = a.slice().sort((x, y) => x - y);
+    return b[Math.floor(b.length / 2)];
+  };
+  const quant = (a, p) => {
+    if (!a.length) return null;
+    const b = a.slice().sort((x, y) => x - y);
+    return b[Math.min(b.length - 1, Math.floor(p * b.length))];
+  };
+
+  /**
+   * 수기 간트 구간 + 현재 플래너(마스터/원본) → 학습 보고서.
+   */
+  function analyze(parsed, planner) {
+    const segs = parsed.segs.filter((s) => s.part);
+    const byPart = {};
+    for (const it of planner.items) if (it.dupOf == null) (byPart[up(it.partCode)] = byPart[up(it.partCode)] || []).push(it);
+    const itemFor = (s) => {
+      const list = byPart[s.part] || [];
+      if (!list.length) return null;
+      if (s.qty) {
+        let best = list[0];
+        for (const it of list) if (Math.abs((it.openQty || it.qty) - s.qty) < Math.abs((best.openQty || best.qty) - s.qty)) best = it;
+        return best;
+      }
+      return list[0];
+    };
+    const jobsMap = new Map();
+    for (const s of segs) {
+      const k = s.part + '|' + (s.qty || '');
+      if (!jobsMap.has(k)) jobsMap.set(k, []);
+      jobsMap.get(k).push(s);
+    }
+    const jobs = [...jobsMap.values()];
+    const lastIdx = parsed.horizon - 1;
+    const inside = (l) => l.every((s) => !s.cont && s.start > 0 && s.end < lastIdx - 1);
+
+    // 수량대별 호기 수 / 가공기간 / 보정계수
+    const bands = BANDS.map((b) => ({ key: b.key, label: b.label, jobs: 0, machines: [], run: [], ratio: [] }));
+    const rates = {};
+    for (const l of jobs) {
+      const qty = l[0].qty;
+      const it = itemFor(l[0]);
+      if (!qty || !inside(l)) continue;
+      const b = bands.find((x) => x.key === bandOf(qty).key);
+      const n = new Set(l.map((s) => s.machine)).size;
+      const md = l.reduce((a, s) => a + s.days, 0);
+      b.jobs++;
+      b.machines.push(n);
+      b.run.push(Math.round(md / n));
+      if (it && it.daily > 0) {
+        b.ratio.push(md / (Math.ceil(qty / it.daily) + (it.buffer || 0)));
+        (rates[it.prod] = rates[it.prod] || { prod: it.prod, std: it.daily, list: [] }).list.push(qty / md);
+      }
+    }
+    const factors = {};
+    for (const b of bands) {
+      b.machinesMed = med(b.machines);
+      b.machinesMax = b.machines.length ? Math.max(...b.machines) : null;
+      b.runMed = med(b.run);
+      b.ratioMed = b.ratio.length ? Math.round(med(b.ratio) * 100) / 100 : null;
+      if (b.ratio.length >= 5) factors[b.key] = Math.min(3, Math.max(0.3, b.ratioMed));
+    }
+    const classRates = Object.values(rates)
+      .map((r) => ({ prod: r.prod, n: r.list.length, std: r.std, med: Math.round(med(r.list)), p25: Math.round(quant(r.list, 0.25)), p75: Math.round(quant(r.list, 0.75)) }))
+      .sort((a, b) => b.n - a.n);
+
+    // 방/작업자 분산, 같은 날 시작
+    const multi = jobs.filter((l) => new Set(l.map((s) => s.machine)).size > 1);
+    const roomOf = (m) => (planner.machineByNo[m] ? planner.machineByNo[m].room : '?');
+    const spread = {
+      multiJobs: multi.length,
+      oneRoom: multi.filter((l) => new Set(l.map((s) => roomOf(s.machine))).size === 1).length,
+      distinctWorkers: multi.filter((l) => {
+        const ws = l.map((s) => planner.workerByMachine[s.machine] || 'm' + s.machine);
+        return new Set(ws).size === ws.length;
+      }).length,
+      sameDayStart: multi.filter((l) => new Set(l.map((s) => s.start)).size === 1).length,
+    };
+    const workerDay = {};
+    for (const s of segs) {
+      if (s.cont) continue;
+      const w = planner.workerByMachine[s.machine];
+      if (w) workerDay[w + '|' + s.start] = (workerDay[w + '|' + s.start] || 0) + 1;
+    }
+    const wd = Object.values(workerDay);
+
+    // 방마스터 적합도와 밖 배정 조합
+    const fit = { t0: 0, t1: 0, t2: 0, out: 0, unknown: 0 };
+    const outside = new Map();
+    const matRooms = new Map();
+    for (const s of segs) {
+      const it = itemFor(s);
+      const mc = planner.machineByNo[s.machine];
+      if (!it || !mc) {
+        fit.unknown++;
+        continue;
+      }
+      const re = E.roomEligible(planner.rooms[mc.room], it);
+      if (!re) {
+        fit.out++;
+        const k = mc.room + '|' + it.main + '|' + it.prod + '|' + (it.matGroup || up(it.material) || '재질없음');
+        outside.set(k, (outside.get(k) || 0) + 1);
+      } else if (re.score >= 150) fit.t0++;
+      else if (re.score >= 100) fit.t1++;
+      else fit.t2++;
+      if (!it.matGroup && it.material && ['PL', 'TE'].includes(it.main)) {
+        const room = planner.rooms[mc.room];
+        const fam = room ? up(room.matGroup) : '';
+        const mk = exactKey(it.material);
+        if (!matRooms.has(mk)) matRooms.set(mk, {});
+        const t = matRooms.get(mk);
+        t[fam || '-'] = (t[fam || '-'] || 0) + 1;
+      }
+    }
+    const outsideList = [...outside.entries()]
+      .map(([k, n]) => {
+        const [room, main, prod, mat] = k.split('|');
+        return { room, main, prod, mat, n };
+      })
+      .sort((a, b) => b.n - a.n);
+    // 재질 → 소재계열 매핑 제안: 계열이 정해진 방에 70% 이상 & 3건 이상
+    const matHints = [];
+    for (const [mat, t] of matRooms) {
+      const total = Object.values(t).reduce((a, b) => a + b, 0);
+      const [fam, n] = Object.entries(t).sort((a, b) => b[1] - a[1])[0];
+      const famTok = fam.split('/')[0];
+      if (famTok && famTok !== '-' && total >= 3 && n / total >= 0.7) matHints.push({ material: mat, family: famTok, n, total });
+    }
+    matHints.sort((a, b) => b.n - a.n);
+
+    return {
+      firstDate: parsed.firstDate,
+      horizon: parsed.horizon,
+      segments: segs.length,
+      jobs: jobs.length,
+      matched: segs.filter((s) => itemFor(s)).length,
+      machinesUsed: new Set(segs.map((s) => s.machine)).size,
+      bands,
+      factors,
+      classRates,
+      spread,
+      workerDay: { p50: quant(wd, 0.5), p95: quant(wd, 0.95), max: wd.length ? Math.max(...wd) : 0 },
+      fit,
+      outsideList,
+      matHints,
+    };
+  }
+  function exactKey(material) {
+    return up(material).replace(/\s+/g, '').replace(/-\d+$/, '');
+  }
+
+  /** 자동배정 결과를 같은 기준(수량대별 호기 수·가공기간)으로 요약해 수기 간트와 나란히 비교. */
+  function summarizePlan(planner) {
+    const byItem = new Map();
+    for (const d of planner.drafts) {
+      if (!byItem.has(d.itemKey)) byItem.set(d.itemKey, []);
+      byItem.get(d.itemKey).push(d);
+    }
+    const bands = BANDS.map((b) => ({ key: b.key, label: b.label, jobs: 0, machines: [], run: [] }));
+    let oneRoom = 0;
+    let multi = 0;
+    for (const [k, l] of byItem) {
+      const it = planner.itemByKey[k];
+      const qty = l.reduce((a, d) => a + d.qty, 0);
+      const b = bands.find((x) => x.key === bandOf(qty).key);
+      b.jobs++;
+      b.machines.push(l.length);
+      b.run.push(Math.round(l.reduce((a, d) => a + d.days, 0) / l.length));
+      if (l.length > 1) {
+        multi++;
+        if (new Set(l.map((d) => planner.groupOf[d.machine])).size === 1) oneRoom++;
+      }
+      void it;
+    }
+    for (const b of bands) {
+      b.machinesMed = med(b.machines);
+      b.machinesMax = b.machines.length ? Math.max(...b.machines) : null;
+      b.runMed = med(b.run);
+    }
+    return { bands, multi, oneRoom };
+  }
+
+  return { BANDS, DEFAULT_FACTORS, bandOf, parseLabel, parseGantt, analyze, summarizePlan };
+});
+</script>
 <script>/* CNC 가공일정 수립 - 화면 */
 (function () {
   'use strict';
@@ -2717,6 +3175,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     delayPolicy: 'block',
     requireActualOk: false,
     matMap: '',
+    periodOn: true,
+    periodFactors: { b1: 0.5, b2: 1.4, b3: 1.45, b4: 1.2 },
   };
   const savedSettings = store.get('cnc.settings', {});
   const S = {
@@ -2749,6 +3209,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       delayPolicy: S.settings.delayPolicy,
       requireActualOk: S.settings.requireActualOk,
       materialMap: E.parseMaterialMap(S.settings.matMap),
+      periodFactors: S.settings.periodOn ? S.settings.periodFactors : null,
     };
   }
 
@@ -2824,6 +3285,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     if (S.tab === 'gantt') renderGantt();
     if (S.tab === 'review') renderReview();
     if (S.tab === 'master') renderMaster();
+    if (S.tab === 'learn') renderLearn();
     renderReviewCount();
     if (S.openKey) renderDrawer();
   }
@@ -2832,7 +3294,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     const m = S.model;
     const txt = S.isDemo
       ? '예시 데이터(가상)로 열려 있습니다 · [엑셀 불러오기]로 회사 통합문서(.xlsm)를 여세요'
-      : S.source + ' · 원본 ' + nf(m.raw.length) + '행 · 설비 ' + nf(m.machines.length) + '대 · 확정일정 ' + nf(m.confirmed.length) + '건 · 기준게시일 ' + E.fmtYMD(S.baseDate);
+      : S.source + ' · 원본 ' + nf(m.raw.length) + '행 · 설비 ' + nf(m.machines.length) + '대 · ' + (S.planner.initial.used ? '9번 비어 있음 → 프로그램 기존배정 ' + nf(S.planner.initial.rows.length) + '행을 현행 일정으로 사용' : '확정일정 ' + nf(m.confirmed.length) + '건') + ' · 기준게시일 ' + E.fmtYMD(S.baseDate);
     $('sourceLine').textContent = txt;
   }
 
@@ -2857,7 +3319,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   function renderTabs() {
     for (const b of document.querySelectorAll('.tab')) b.setAttribute('aria-selected', String(b.dataset.tab === S.tab));
-    for (const t of ['items', 'gantt', 'review', 'master']) $('panel-' + t).hidden = t !== S.tab;
+    for (const t of ['items', 'gantt', 'review', 'master', 'learn']) $('panel-' + t).hidden = t !== S.tab;
   }
   function renderReviewCount() {
     const n = S.planner.summary().review;
@@ -3137,6 +3599,112 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
 
   // 기준 점검
+  // ───────────────────────── 현장 학습 (수기 간트) ─────────────────────────
+  S.learn = store.get('cnc.learn', null);
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) + '%' : '-');
+  function renderLearn() {
+    const L = window.CNCLearn;
+    const f = S.settings.periodFactors;
+    const cur = '현재 적용: ' + (S.settings.periodOn ? '1만 미만 ×' + f.b1 + ' · 1만~5만 ×' + f.b2 + ' · 5만~15만 ×' + f.b3 + ' · 15만 이상 ×' + f.b4 : '보정 안 함');
+    const rep = S.learn;
+    if (!rep) {
+      $('learnBody').innerHTML =
+        '<div class="mcard"><h3>담당자 수기 간트에서 배정 습관 배우기</h3><p class="hint">[수기 간트 불러오기]로 방별 수기 간트 파일을 열면 수량대별 호기 수·가공기간, 실제 일생산량, 방/작업자 분산, 방마스터 밖 배정을 뽑아 자동배정과 나란히 보여줍니다. 가공기간 보정계수를 학습값으로 바꿀 수 있습니다.</p><p class="hint">' + esc(cur) + ' (가공1팀 수기 간트 9/28~11월분 학습값이 기본)</p></div>';
+      return;
+    }
+    const plan = S.planner.drafts.length ? L.summarizePlan(S.planner) : null;
+    const cards = [];
+    cards.push(
+      '<div class="mcard"><h3>수기 간트 요약</h3><ul>' +
+        '<li>기간 <b>' + E.fmtYMD(rep.firstDate) + ' ~ ' + E.fmtYMD(rep.firstDate + rep.horizon - 1) + '</b> (' + rep.horizon + '일)</li>' +
+        '<li>작업 <b>' + nf(rep.jobs) + '</b>건 · 구간 ' + nf(rep.segments) + ' · 사용 호기 ' + nf(rep.machinesUsed) + '대</li>' +
+        '<li>현재 원본과 부품코드 일치 ' + pct(rep.matched, rep.segments) + '</li>' +
+        '<li>파일: ' + esc(rep.file || '') + '</li></ul></div>'
+    );
+    const rows = rep.bands
+      .map((b) => {
+        const p = plan && plan.bands.find((x) => x.key === b.key);
+        return (
+          '<tr><td>' + esc(b.label) + '</td><td class="num">' + b.jobs + '</td><td class="num">' + (b.machinesMed == null ? '-' : b.machinesMed + ' / ' + b.machinesMax) + '</td><td class="num">' + (b.runMed == null ? '-' : b.runMed + '일') + '</td><td class="num"><b>' + (b.ratioMed == null ? '-' : '×' + b.ratioMed) + '</b></td>' +
+          '<td class="num">' + (p ? p.jobs : '-') + '</td><td class="num">' + (p && p.machinesMed != null ? p.machinesMed + ' / ' + p.machinesMax : '-') + '</td><td class="num">' + (p && p.runMed != null ? p.runMed + '일' : '-') + '</td><td class="num">' + (S.settings.periodOn ? '×' + f[b.key] : '-') + '</td></tr>'
+        );
+      })
+      .join('');
+    const canApply = Object.keys(rep.factors).length > 0;
+    cards.push(
+      '<div class="mcard wide"><h3>수량대별 호기 수·가공기간: 수기 vs 자동</h3><p class="hint">기준대비 = 수기 장비일 ÷ 기준 장비일(6_생산성기준). 1보다 크면 담당자가 기준보다 길게 잡은 것입니다. 기간 안에서 시작·종료한 작업만 셉니다.</p>' +
+        '<div class="table-wrap"><table class="grid"><thead><tr><th>수량대</th><th class="num">수기 작업</th><th class="num">수기 호기 중앙/최대</th><th class="num">수기 가공기간</th><th class="num">기준대비</th><th class="num">자동 작업</th><th class="num">자동 호기 중앙/최대</th><th class="num">자동 가공기간</th><th class="num">적용 계수</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+        '<div class="row"><button class="btn primary small" type="button" id="learnApply"' + (canApply ? '' : ' disabled') + '>학습 계수 적용 후 다시 수립</button><span class="hint">' + esc(cur) + (canApply ? ' → 학습값 ' + Object.entries(rep.factors).map(([k, v]) => '×' + v).join(' / ') : '') + '</span></div></div>'
+    );
+    cards.push(
+      '<div class="mcard"><h3>실제 일생산량 (호기 1대·하루)</h3><div class="table-wrap"><table class="grid"><thead><tr><th>생산성분류</th><th class="num">작업</th><th class="num">기준</th><th class="num">수기 중앙</th><th class="num">하위~상위 25%</th></tr></thead><tbody>' +
+        rep.classRates.map((r) => '<tr><td>' + esc(r.prod) + '</td><td class="num">' + r.n + '</td><td class="num">' + nf(r.std) + '</td><td class="num"><b>' + nf(r.med) + '</b></td><td class="num">' + nf(r.p25) + '~' + nf(r.p75) + '</td></tr>').join('') +
+        '</tbody></table></div><p class="hint">수기 값은 셋팅·대기 일을 포함한 계획 기준입니다. 6_생산성기준을 바꿀지는 담당자가 판단하세요.</p></div>'
+    );
+    const sp = rep.spread;
+    cards.push(
+      '<div class="mcard"><h3>배정 습관</h3><ul>' +
+        '<li>여러 호기 작업 ' + sp.multiJobs + '건 중 <b>한 방 안</b>에서 편성 ' + pct(sp.oneRoom, sp.multiJobs) + (plan ? ' (자동 ' + pct(plan.oneRoom, plan.multi) + ')' : '') + '</li>' +
+        '<li>호기마다 담당작업자가 모두 다름 ' + pct(sp.distinctWorkers, sp.multiJobs) + '</li>' +
+        '<li>같은 날 동시에 시작 ' + pct(sp.sameDayStart, sp.multiJobs) + '</li>' +
+        '<li>작업자 1인 하루 신규셋팅 중앙 ' + rep.workerDay.p50 + '건 · 상위 5% ' + rep.workerDay.p95 + '건 · 최대 ' + rep.workerDay.max + '건 (현재 한도 ' + (S.settings.setupLimitPerWorkerDay || '없음') + ')</li></ul></div>'
+    );
+    const fit = rep.fit;
+    const tot = fit.t0 + fit.t1 + fit.t2 + fit.out;
+    cards.push(
+      '<div class="mcard wide"><h3>방마스터와 실제 배정</h3><p class="hint">1순위 방 ' + pct(fit.t0, tot) + ' · 소재계열만 일치 ' + pct(fit.t1, tot) + ' · 2차후보 ' + pct(fit.t2, tot) + ' · <b>방마스터 밖 ' + pct(fit.out, tot) + '</b>. 밖 배정이 많은 조합은 3_방마스터에 허용 소재/생산성을 추가할지 검토할 대상입니다.</p>' +
+        '<div class="table-wrap"><table class="grid"><thead><tr><th>실제 방</th><th>대분류</th><th>생산성분류</th><th>재질(계열)</th><th class="num">구간</th></tr></thead><tbody>' +
+        rep.outsideList.slice(0, 12).map((o) => '<tr><td>' + esc(o.room) + '</td><td>' + esc(o.main) + '</td><td>' + esc(o.prod) + '</td><td>' + esc(o.mat) + '</td><td class="num">' + o.n + '</td></tr>').join('') +
+        '</tbody></table></div>' +
+        (rep.matHints.length
+          ? '<div class="box"><h3>소재계열 매핑 제안</h3>' + rep.matHints.map((h) => '<div class="row"><span>재질 <b>' + esc(h.material) + '</b> → ' + esc(h.family) + ' 계열 방에 ' + h.n + '/' + h.total + '구간</span><button class="btn small" type="button" data-addmat="' + esc(h.material + '=' + h.family) + '"' + (E.parseMaterialMap(S.settings.matMap)[h.material] ? ' disabled' : '') + '>' + esc(h.material + '=' + h.family) + ' 추가</button></div>').join('') + '</div>'
+          : '') +
+        '</div>'
+    );
+    $('learnBody').innerHTML = '<div class="mgrid">' + cards.join('') + '</div>';
+    const ap = $('learnApply');
+    if (ap)
+      ap.onclick = () => {
+        S.settings.periodOn = true;
+        S.settings.periodFactors = Object.assign({}, S.settings.periodFactors, rep.factors);
+        store.set('cnc.settings', S.settings);
+        replan('학습 계수를 적용했습니다');
+      };
+    for (const b of document.querySelectorAll('[data-addmat]'))
+      b.onclick = () => {
+        S.settings.matMap = (S.settings.matMap ? S.settings.matMap.trim() + '\n' : '') + b.dataset.addmat;
+        store.set('cnc.settings', S.settings);
+        replan(b.dataset.addmat + ' 매핑을 추가했습니다');
+      };
+  }
+  function replan(msg) {
+    busy('기준 적용 중…', () => {
+      rebuild('manual');
+      S.planner.autoPlan();
+      saveDrafts();
+      renderAll();
+      toast(msg + ' · 자동 가배정 다시 계산');
+    });
+  }
+  function handleLearnFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () =>
+      busy('수기 간트 분석 중…', () => {
+        const first = E.toSerial($('learnFirst').value);
+        const parsed = window.CNCLearn.parseGantt(new Uint8Array(reader.result), { today, firstDate: first });
+        if (!parsed.segs.length) return toast('간트 구간을 찾지 못했습니다. 1행에 날짜(일), A열에 호기 번호가 있는 방별 시트인지 확인하세요');
+        const rep = window.CNCLearn.analyze(parsed, S.planner);
+        rep.file = file.name;
+        S.learn = rep;
+        store.set('cnc.learn', rep);
+        $('learnFirst').value = E.fmtYMD(parsed.firstDate);
+        renderAll();
+        toast('수기 간트 ' + nf(rep.jobs) + '건을 분석했습니다');
+      });
+    reader.readAsArrayBuffer(file);
+  }
+
   function renderMaster() {
     const P = S.planner;
     const m = S.model;
@@ -3152,6 +3720,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           ['작업자운영', m.workers.length],
           ['BD규격마스터', m.bdSpecs.length],
           ['9번 확정일정', m.confirmed.length],
+          ['프로그램 기존배정 초기이관', S.planner.initial.used ? S.planner.initial.rows.length : 0],
+          ['초기이관 제외(날짜·수량 확인)', S.planner.initial.skipped.length],
         ]
           .map(([k, v]) => '<li>' + esc(k) + ' <b>' + nf(v) + '</b></li>')
           .join('') +
@@ -3173,7 +3743,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       rooms.set(mc.room, r);
     }
     cards.push(
-      '<div class="mcard"><h3>방별 가배정 부하</h3><div class="table-wrap"><table class="grid"><thead><tr><th>방</th><th class="num">호기</th><th class="num">사용</th><th class="num">장비일</th><th>최종완료</th><th class="num">완료확인</th></tr></thead><tbody>' +
+      '<div class="mcard"><h3>방별 가배정 부하</h3>' +
+        ([...rooms.entries()].filter(([, r]) => r.last && r.last > today + 90).length
+          ? '<p class="hint late-text">최종완료가 3개월을 넘는 방: ' + esc([...rooms.entries()].filter(([, r]) => r.last && r.last > today + 90).map(([k, r]) => k + ' ' + E.fmtYMD(r.last)).join(', ')) + ' – 방마스터상 이 방에만 갈 수 있는 품목이 몰린 것입니다. 3_방마스터 허용 범위나 현장 학습 탭의 방마스터 밖 배정을 확인하세요.</p>'
+          : '') +
+        '<div class="table-wrap"><table class="grid"><thead><tr><th>방</th><th class="num">호기</th><th class="num">사용</th><th class="num">장비일</th><th>최종완료</th><th class="num">완료확인</th></tr></thead><tbody>' +
         [...rooms.entries()]
           .map(([k, r]) => '<tr><td>' + esc(k) + '</td><td class="num">' + r.n + '</td><td class="num">' + r.used + '</td><td class="num">' + nf(r.days) + '</td><td class="when">' + (r.last ? E.fmtMD(r.last) : '-') + '</td><td class="num">' + r.delayed + '</td></tr>')
           .join('') +
@@ -3277,7 +3851,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     if (!it) return closeDrawer();
     const r = P.results[it.key] || {};
     const work = P.workQty(it);
-    const days = E.daysForQty(it, work);
+    const days = P.planDays(it, work);
     $('dwEyebrow').innerHTML = statePill(it) + ' &nbsp;' + esc(it.planNo || '계획번호 없음') + ' · ' + esc(it.productCode);
     $('dwTitle').textContent = it.partCode;
     const facts = [
@@ -3305,11 +3879,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     if (it.note && r.late > 0) html += '<p class="hint">' + esc(it.note) + '</p>';
 
     const ds = draftsOf(it.key);
-    const confirmedRows = (S.model.confirmed || []).filter((c) => E.itemKey(c.planNo, c.productCode, c.partCode) === it.key);
+    const confirmedRows = (S.planner.model.confirmed || []).filter((c) => E.itemKey(c.planNo, c.productCode, c.partCode) === it.key);
     html += '<div class="box"><h3>현재 배정</h3>';
     if (!ds.length && !confirmedRows.length) html += '<p class="hint">배정 없음</p>';
     if (confirmedRows.length)
-      html += '<div class="alloc">' + confirmedRows.map((c) => '<span class="chip">확정 <b>' + esc(c.machine) + '</b> ' + E.fmtMD(c.start) + '~' + E.fmtMD(c.end) + ' · ' + nf(c.qty) + '</span>').join('') + '</div>';
+      html += '<div class="alloc">' + confirmedRows.map((c) => '<span class="chip">' + (c.source === 'program' ? '프로그램(초기이관)' : '확정') + ' <b>' + esc(c.machine) + '</b> ' + E.fmtMD(c.start) + '~' + E.fmtMD(c.end) + ' · ' + nf(c.qty) + '</span>').join('') + '</div>';
     if (ds.length) {
       html +=
         '<div class="table-wrap"><table class="grid edit-table"><thead><tr><th>구분</th><th>호기</th><th>방 · 담당</th><th>시작일</th><th class="num">장비일</th><th>완료일</th><th class="num">수량</th><th></th></tr></thead><tbody>' +
@@ -3524,6 +4098,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     $('setDelay').value = s.delayPolicy;
     $('setActualOk').value = s.requireActualOk ? '1' : '0';
     $('setMatMap').value = s.matMap;
+    $('setPeriodOn').value = s.periodOn ? '1' : '0';
+    ['b1', 'b2', 'b3', 'b4'].forEach((k, i) => ($('setPF' + (i + 1)).value = s.periodFactors[k]));
     $('dlgSettings').showModal();
   }
   function applySettings() {
@@ -3547,6 +4123,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       delayPolicy: $('setDelay').value,
       requireActualOk: $('setActualOk').value === '1',
       matMap: $('setMatMap').value,
+      periodOn: $('setPeriodOn').value === '1',
+      periodFactors: Object.fromEntries(['b1', 'b2', 'b3', 'b4'].map((k, i) => [k, Math.min(3, Math.max(0.2, Number($('setPF' + (i + 1)).value) || DEFAULTS.periodFactors[k]))])),
     };
     S.baseDate = base != null ? base : today + 1;
     store.set('cnc.settings', S.settings);
@@ -3589,9 +4167,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     document.addEventListener('drop', (e) => {
       e.preventDefault();
       const f = e.dataTransfer && e.dataTransfer.files[0];
-      if (f) handleFile(f);
+      if (f) (S.tab === 'learn' ? handleLearnFile : handleFile)(f);
     });
     $('btnAuto').onclick = runAuto;
+    $('learnFile').addEventListener('change', (e) => {
+      handleLearnFile(e.target.files[0]);
+      e.target.value = '';
+    });
     $('btnExport').onclick = openExportDialog;
     $('btnSettings').onclick = openSettings;
     $('settingsApply').onclick = applySettings;
@@ -3719,7 +4301,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       if (e.target.id === 'dwMachines') syncPicks();
       if (e.target.id === 'dwQty') {
         const it = S.planner.itemByKey[S.openKey];
-        const d = E.daysForQty(it, Number(e.target.value));
+        const d = S.planner.planDays(it, Number(e.target.value));
         if (d) $('dwDays').value = d;
       }
     });

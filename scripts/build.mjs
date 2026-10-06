@@ -14,6 +14,7 @@ const parts = {
   '/*__ENGINE__*/': safe(read('src/engine.js')),
   '/*__WORKBOOK__*/': safe(read('src/workbook.js')),
   '/*__DEMO__*/': safe(read('src/demo.js')),
+  '/*__LEARN__*/': safe(read('src/learn.js')),
   '/*__APP_JS__*/': safe(read('src/app.js')),
 };
 let body = read('src/index.html');
