@@ -42,6 +42,9 @@
     requireActualOk: false,
     matMap: '',
     periodOn: true,
+    roomRules: 'SK 커터 = 4번방',
+    roomWaitDays: 14,
+    heavyMachines: 5,
     periodFactors: { b1: 0.5, b2: 1.4, b3: 1.45, b4: 1.2 },
   };
   const savedSettings = store.get('cnc.settings', {});
@@ -76,6 +79,9 @@
       requireActualOk: S.settings.requireActualOk,
       materialMap: E.parseMaterialMap(S.settings.matMap),
       periodFactors: S.settings.periodOn ? S.settings.periodFactors : null,
+      roomRules: S.settings.roomRules,
+      roomWaitDays: S.settings.roomWaitDays,
+      heavyMachines: S.settings.heavyMachines,
     };
   }
 
@@ -174,7 +180,7 @@
       { label: '배정 대상 품목', value: nf(s.items), sub: '배정완료 ' + nf(s.done) + '건 포함' },
       { label: '가배정', value: nf(s.draft), sub: (S.settings.allocMode === 'spread' ? '분산형' : '집중형') + ' · 호기 ' + nf(s.machines) + '대 · 배정행 ' + nf(s.drafts), cls: 'draft' },
       { label: '납기 초과 확인필요', value: nf(s.late), sub: '담당자 확인 완료 ' + nf(s.lateAck) + '건', cls: 'late' },
-      { label: '수기검토', value: nf(s.review), sub: '자동기준 밖 품목', cls: 'review' },
+      { label: '수기검토', value: nf(s.review), sub: '자동기준 밖 품목 · 호기 다수 점유 ' + nf(P.items.filter((it) => it.dupOf == null && P.isHeavy(it.key)).length) + '건', cls: 'review' },
       { label: '미처리', value: nf(s.todo), sub: s.todo ? '[자동 일정수립] 실행 필요' : '남은 품목 없음' },
       { label: '가배정 최종완료', value: last ? E.fmtMD(last) : '-', sub: '완료확인 필요 호기 ' + delayed + '대' },
     ];
@@ -435,9 +441,15 @@
       let g = null;
       if (st === '수기검토') g = reasonGroup(r && r.reason);
       else if (st === '가배정(지연)') g = '납기 초과 – 담당자 조정 필요';
-      if (!g) continue;
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(it);
+      if (g) {
+        if (!groups.has(g)) groups.set(g, []);
+        groups.get(g).push(it);
+      }
+      if (P.isHeavy(it.key)) {
+        const h = '호기 다수 점유 (' + (S.settings.heavyMachines || 5) + '대 이상) – 담당자 검토';
+        if (!groups.has(h)) groups.set(h, []);
+        groups.get(h).push(it);
+      }
     }
     if (!groups.size) {
       $('reviewList').innerHTML = '<p class="hint">수기검토 품목이 없습니다. [자동 일정수립]을 실행하면 자동기준 밖 품목이 여기에 모입니다.</p>';
@@ -446,7 +458,7 @@
     const sorted = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
     $('reviewList').innerHTML = sorted
       .map(([g, list], gi) => {
-        const fix = (FIX.find(([re]) => re.test(g)) || [null, g.startsWith('납기') ? '품목을 열어 가배정표에서 가공기간(장비일)·시작일·호기를 바꾸거나 [호기 추가·재배분]으로 다른 호기를 넣으세요. 그대로 진행하면 [지연 확인 완료]를 누르면 이 목록에서 빠집니다.' : ''])[1];
+        const fix = (FIX.find(([re]) => re.test(g)) || [null, g.startsWith('호기 다수') ? '한 품목이 호기를 많이 차지합니다. 품목을 열어 [호기 수 조정]으로 대수를 줄이고 가공기간을 늘리거나, 이대로 진행하면 [검토 완료]를 누르세요.' : g.startsWith('납기') ? '품목을 열어 가배정표에서 가공기간(장비일)·시작일·호기를 바꾸거나 [호기 추가·재배분]으로 다른 호기를 넣으세요. 그대로 진행하면 [지연 확인 완료]를 누르면 이 목록에서 빠집니다.' : ''])[1];
         const rows = list
           .slice(0, 300)
           .map((it) => {
@@ -519,8 +531,16 @@
     const tot = fit.t0 + fit.t1 + fit.t2 + fit.out;
     cards.push(
       '<div class="mcard wide"><h3>방마스터와 실제 배정</h3><p class="hint">1순위 방 ' + pct(fit.t0, tot) + ' · 소재계열만 일치 ' + pct(fit.t1, tot) + ' · 2차후보 ' + pct(fit.t2, tot) + ' · <b>방마스터 밖 ' + pct(fit.out, tot) + '</b>. 밖 배정이 많은 조합은 3_방마스터에 허용 소재/생산성을 추가할지 검토할 대상입니다.</p>' +
-        '<div class="table-wrap"><table class="grid"><thead><tr><th>실제 방</th><th>대분류</th><th>생산성분류</th><th>재질(계열)</th><th class="num">구간</th></tr></thead><tbody>' +
-        rep.outsideList.slice(0, 12).map((o) => '<tr><td>' + esc(o.room) + '</td><td>' + esc(o.main) + '</td><td>' + esc(o.prod) + '</td><td>' + esc(o.mat) + '</td><td class="num">' + o.n + '</td></tr>').join('') +
+        '<div class="table-wrap"><table class="grid"><thead><tr><th>실제 방</th><th>대분류</th><th>생산성분류</th><th>재질(계열)</th><th class="num">구간</th><th>방 허용 확장</th></tr></thead><tbody>' +
+        rep.outsideList
+          .slice(0, 12)
+          .map((o) => {
+            const rule = o.mat + ' ' + o.prod + ' = ' + o.room;
+            const fam = ['BECU', 'TK', 'SK'].includes(o.mat);
+            const has = E.parseRoomRules(S.settings.roomRules).some((r) => r.mat === o.mat && r.prod === E.up(o.prod) && r.rooms.has(o.room));
+            return '<tr><td>' + esc(o.room) + '</td><td>' + esc(o.main) + '</td><td>' + esc(o.prod) + '</td><td>' + esc(o.mat) + '</td><td class="num">' + o.n + '</td><td>' + (fam ? '<button class="btn small" type="button" data-addrule="' + esc(rule) + '"' + (has ? ' disabled' : '') + '>' + (has ? '허용됨' : '허용 추가') + '</button>' : '') + '</td></tr>';
+          })
+          .join('') +
         '</tbody></table></div>' +
         (rep.matHints.length
           ? '<div class="box"><h3>소재계열 매핑 제안</h3>' + rep.matHints.map((h) => '<div class="row"><span>재질 <b>' + esc(h.material) + '</b> → ' + esc(h.family) + ' 계열 방에 ' + h.n + '/' + h.total + '구간</span><button class="btn small" type="button" data-addmat="' + esc(h.material + '=' + h.family) + '"' + (E.parseMaterialMap(S.settings.matMap)[h.material] ? ' disabled' : '') + '>' + esc(h.material + '=' + h.family) + ' 추가</button></div>').join('') + '</div>'
@@ -535,6 +555,12 @@
         S.settings.periodFactors = Object.assign({}, S.settings.periodFactors, rep.factors);
         store.set('cnc.settings', S.settings);
         replan('학습 계수를 적용했습니다');
+      };
+    for (const b of document.querySelectorAll('[data-addrule]'))
+      b.onclick = () => {
+        S.settings.roomRules = (S.settings.roomRules ? S.settings.roomRules.trim() + '\n' : '') + b.dataset.addrule;
+        store.set('cnc.settings', S.settings);
+        replan('방 허용 확장 "' + b.dataset.addrule + '"을 추가했습니다');
       };
     for (const b of document.querySelectorAll('[data-addmat]'))
       b.onclick = () => {
@@ -658,6 +684,14 @@
         (prodMiss.size ? [...prodMiss.entries()].map(([k, v]) => '<li>' + esc(k) + ' <b>' + v + '건</b></li>').join('') : '<li>없음</li>') +
         '</ul></div>'
     );
+    // 작업자운영마스터 갱신용 양식
+    const virtual = (m.workers || []).filter((w) => /가상|테스트/.test(w.note || '')).length;
+    cards.push(
+      '<div class="mcard"><h3>담당작업자 정보</h3><p class="hint">' +
+        (virtual ? '<span class="late-text">13_작업자운영마스터의 ' + virtual + '개 호기가 "가상 작업자 테스트용"입니다.</span> ' : '') +
+        '작업자 분산과 1인 하루 신규셋팅 한도는 담당작업자 기준으로 계산합니다. 아래 버튼으로 호기·현재 담당작업자·방 목록을 복사해 실제 담당자를 채운 뒤 13_작업자운영마스터 A~C열에 붙여넣으세요.</p>' +
+        '<div class="row"><button class="btn small" type="button" id="copyWorkers">작업자 양식 복사 (' + nf(P.machines.length) + '대)</button></div></div>'
+    );
     // 완료확인 필요 호기
     const delayed = P.machines.filter((mc) => P.timeline.status(mc.no).delayed);
     cards.push(
@@ -691,6 +725,8 @@
         '</div>'
     );
     $('masterList').innerHTML = '<div class="mgrid">' + cards.join('') + '</div>';
+    const cw = $('copyWorkers');
+    if (cw) cw.onclick = () => copyText(['호기\t담당작업자\t방'].concat(P.machines.map((mc) => mc.no + '\t' + (P.workerByMachine[mc.no] || '') + '\t' + mc.room)).join('\n'), '작업자 양식 ' + nf(P.machines.length) + '행을 복사했습니다');
     const cb = $('copyBdList');
     if (cb) cb.onclick = () => copyText([...bdMiss.keys()].join('\n'), 'BD 부품명 ' + bdMiss.size + '종을 복사했습니다');
   }
@@ -772,6 +808,20 @@
         '<div class="row"><label class="check"><input type="checkbox" id="dwPush" checked> 겹치는 뒤 가배정은 뒤로 밀기</label><button class="btn small" type="button" id="dwRealloc">호기 추가·재배분</button><button class="btn small danger" type="button" id="dwClearDrafts">이 품목 가배정 모두 취소</button></div>';
     }
     html += '</div>';
+
+    // 호기 수 조정 (호기를 많이 차지하는 품목)
+    const dMachines = new Set(ds.map((d) => d.machine)).size;
+    if (dMachines >= 2) {
+      const md = ds.reduce((a, d) => a + d.days, 0);
+      const heavy = P.isHeavy(it.key);
+      const sug = Math.max(1, Math.ceil(dMachines / 2));
+      html +=
+        '<div class="box' + (heavy ? ' warn' : '') + '"><h3>호기 수 조정 · 지금 ' + dMachines + '대, 총 ' + md + '장비일</h3>' +
+        '<p class="hint">호기 수를 줄이면 총 장비일과 수량은 그대로 두고 가공기간을 늘려 다시 배분합니다 (지금 호기 중 먼저 시작하는 호기를 남김). 예: ' + sug + '대 → 호기당 약 ' + Math.ceil(md / sug) + '일.</p>' +
+        '<div class="row"><label for="dwReshapeN">호기 수</label><input type="number" id="dwReshapeN" min="1" max="' + dMachines + '" value="' + sug + '" style="width:70px"><button class="btn small primary" type="button" id="dwReshape">이 대수로 다시 배분</button>' +
+        (heavy || (r && r.heavyAck) ? '<button class="btn small" type="button" id="dwAckHeavy">' + (heavy ? '검토 완료 (이대로 진행)' : '검토 완료 취소') + '</button>' : '') +
+        '<span class="hint" id="dwReshapeMsg"></span></div></div>';
+    }
 
     // 후보
     const q = P.candidates(it, { from: S.baseDate });
@@ -965,6 +1015,9 @@
     $('setActualOk').value = s.requireActualOk ? '1' : '0';
     $('setMatMap').value = s.matMap;
     $('setPeriodOn').value = s.periodOn ? '1' : '0';
+    $('setRoomRules').value = s.roomRules;
+    $('setRoomWait').value = s.roomWaitDays;
+    $('setHeavy').value = s.heavyMachines;
     ['b1', 'b2', 'b3', 'b4'].forEach((k, i) => ($('setPF' + (i + 1)).value = s.periodFactors[k]));
     $('dlgSettings').showModal();
   }
@@ -990,6 +1043,9 @@
       requireActualOk: $('setActualOk').value === '1',
       matMap: $('setMatMap').value,
       periodOn: $('setPeriodOn').value === '1',
+      roomRules: $('setRoomRules').value,
+      roomWaitDays: num('setRoomWait', 14, 0),
+      heavyMachines: num('setHeavy', 5, 2),
       periodFactors: Object.fromEntries(['b1', 'b2', 'b3', 'b4'].map((k, i) => [k, Math.min(3, Math.max(0.2, Number($('setPF' + (i + 1)).value) || DEFAULTS.periodFactors[k]))])),
     };
     S.baseDate = base != null ? base : today + 1;
@@ -1123,6 +1179,18 @@
         }
         saveDrafts();
         toast('가배정을 변경했습니다' + (res.pushed ? ' · 뒤 가배정 ' + res.pushed + '건을 밀었습니다' : ''));
+        return renderAll();
+      }
+      if (e.target.id === 'dwReshape') {
+        const res = S.planner.reshapeItem(S.openKey, Number($('dwReshapeN').value));
+        if (!res.ok) return ($('dwReshapeMsg').textContent = res.error);
+        saveDrafts();
+        toast(res.machines + '대로 다시 배분 · 완료 ' + E.fmtMD(res.finish));
+        return renderAll();
+      }
+      if (e.target.id === 'dwAckHeavy') {
+        S.planner.ackHeavy(S.openKey, S.planner.isHeavy(S.openKey));
+        saveDrafts();
         return renderAll();
       }
       if (e.target.id === 'dwAck') {

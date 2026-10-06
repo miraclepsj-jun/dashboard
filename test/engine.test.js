@@ -296,3 +296,40 @@ test('초기일정이관: 9번이 비어 있으면 일정관리 프로그램 설
   // 9번에 일정이 있으면 초기이관을 쓰지 않는다
   assert.equal(new E.Planner(Demo.build(TODAY), { today: TODAY }).initial.used, false);
 });
+
+test('호기 다수 점유 품목: 호기 수를 줄여 기간을 늘리고, 검토 완료 표시', () => {
+  const m = Demo.build(TODAY);
+  m.raw = [{ planNo: 'H1', productCode: 'GX', partCode: 'TEGX901AM-DGP', qty: 300000, received: 0, reqDate: TODAY - 5, material: 'TK-B' }];
+  const P = new E.Planner(m, { today: TODAY, maxMachines: 6, heavyMachines: 5 });
+  P.autoPlan();
+  const key = P.items[0].key;
+  const before = P.drafts.filter((d) => d.itemKey === key);
+  assert.equal(before.length, 6);
+  assert.equal(P.isHeavy(key), true);
+  const md = before.reduce((a, d) => a + d.days, 0);
+  const res = P.reshapeItem(key, 3);
+  assert.equal(res.ok, true);
+  const after = P.drafts.filter((d) => d.itemKey === key);
+  assert.equal(after.length, 3);
+  assert.equal(after.reduce((a, d) => a + d.qty, 0), 300000);
+  assert.equal(after.reduce((a, d) => a + d.days, 0), md);
+  assert.ok(Math.max(...after.map((d) => d.end)) > Math.max(...before.map((d) => d.end)), '기간이 길어져야 함');
+  assert.equal(P.isHeavy(key), false);
+  assert.equal(P.results[key].decision, '수기가배정');
+});
+
+test('방 허용 확장: 규칙에 지정한 방도 후보가 되고, 1순위 방이 많이 밀릴 때 쓴다', () => {
+  const m = Demo.build(TODAY);
+  m.raw = [{ planNo: 'X1', productCode: 'DB', partCode: 'PLDB555C-B', qty: 6000, received: 0, reqDate: TODAY + 30, material: 'SK-4' }];
+  // 1번방(SK) 전 호기를 40일 막아 둔다
+  m.confirmed = m.machines.filter((x) => x.room === '1번방').map((x) => ({ planNo: 'Z', productCode: 'Z', partCode: 'PLZZ1AR-B', machine: x.no, start: TODAY, end: TODAY + 40, qty: 100 }));
+  const strict = new E.Planner(m, { today: TODAY });
+  strict.autoPlan();
+  assert.equal(strict.groupOf[strict.drafts[0].machine], '1번방');
+  const ext = new E.Planner(m, { today: TODAY, roomRules: 'SK 커터 = 4번방' });
+  const c = ext.candidates(ext.items[0]).candidates;
+  assert.ok(c.some((x) => x.ext && x.room === '4번방'));
+  ext.autoPlan();
+  assert.equal(ext.groupOf[ext.drafts[0].machine], '4번방');
+  assert.ok(ext.drafts[0].start < strict.drafts[0].start);
+});

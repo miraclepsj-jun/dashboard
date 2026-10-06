@@ -215,6 +215,25 @@
     if (s.includes('SK-') || s.startsWith('SK')) return 'SK';
     return '';
   }
+  /** "SK 커터 = 4번방, 6번방" → [{mat:'SK', prod:'커터', rooms:Set(['4번방','6번방'])}] ('*'는 전체) */
+  function parseRoomRules(text) {
+    const out = [];
+    for (const line of String(text || '').split(/\n+/)) {
+      const [l, r] = line.split('=');
+      if (!r) continue;
+      const toks = l.trim().split(/[\s/]+/).filter(Boolean);
+      if (toks.length < 2) continue;
+      const rooms = new Set(
+        r.split(/[,\s/]+/)
+          .map((x) => x.trim())
+          .filter(Boolean)
+          .map((x) => (/^\d+$/.test(x) ? x + '번방' : x))
+      );
+      if (rooms.size) out.push({ mat: up(toks[0]), prod: up(toks[1]), rooms, text: line.trim() });
+    }
+    return out;
+  }
+
   /** "H5J=TK\nC3604=BECU" → {H5J:'TK', C3604:'BECU'} */
   function parseMaterialMap(text) {
     const map = {};
@@ -729,6 +748,7 @@
         }
       }
       this._buildGroups(model);
+      this.roomRules = parseRoomRules(opts.roomRules);
       // 확정행의 재질(동일부품 연속가공 판단용)은 원본 품목에서 찾는다.
       const confirmed = (model.confirmed || []).map((c) => {
         const it = this.itemByKey[itemKey(c.planNo, c.productCode, c.partCode)];
@@ -852,7 +872,7 @@
       for (const mc of this.machines) {
         diag.total++;
         const room = this.rooms[str(mc.room)];
-        const re = roomEligible(room, item);
+        const re = roomEligible(room, item) || this._roomExtension(room, item);
         if (!re) continue;
         diag.room++;
         if (isExplicitNo(mc.scheduleTarget) || isExplicitNo(mc.newSetupOk)) continue;
@@ -954,6 +974,7 @@
           status: conditional ? '조건부가능' : '가능',
           score,
           roomScore: re.score,
+          ext: !!re.ext,
           roomReason: re.reason,
           note,
           sameCont,
@@ -1211,32 +1232,55 @@
     }
 
     /**
-     * 방마스터 적합 단계: 0 = 기본소재계열과 우선생산성분류가 모두 맞는 방(방마스터 1순위),
-     * 1 = 그 밖의 A등급(소재계열만 맞고 현재소재도 같은 호기), 2 = B-2차후보.
+     * 방 허용 확장(기준 설정): 방마스터로는 갈 수 없는 품목을 지정한 방에도 허용한다.
+     * 규칙 예: "SK 커터 = 4번방" (소재계열 생산성분류 = 방). 방의 허용대분류·자동후보사용은 그대로 지킨다.
+     */
+    _roomExtension(room, item) {
+      if (!room || up(room.autoUse) === 'N' || isRoom7(room.name)) return null;
+      if (str(room.mainAllowed) && !containsToken(room.mainAllowed, item.main)) return null;
+      for (const r of this.roomRules) {
+        if (!r.rooms.has(str(room.name))) continue;
+        if (r.mat !== '*' && r.mat !== up(item.matGroup)) continue;
+        if (r.prod !== '*' && r.prod !== up(item.prod)) continue;
+        return { score: 5, reason: '방 허용 확장(' + r.text + ')', conditional: false, ext: true };
+      }
+      return null;
+    }
+
+    /**
+     * 방마스터 적합 단계: 0 = 기본소재계열과 우선생산성분류가 모두 맞는 방(1순위),
+     * 1 = 그 밖의 A등급(소재계열만 맞고 현재소재도 같은 호기), 2 = 방 허용 확장, 3 = B-2차후보.
      */
     roomTier(c) {
-      if (c.grade[0] === 'B') return 2;
+      if (c.ext) return 2;
+      if (c.grade[0] === 'B') return 3;
       return c.roomScore >= 150 ? 0 : 1;
     }
 
     /**
-     * 일괄배정용 호기 선택. 방마스터 기준을 최대한 지킨다:
-     * - 1순위 방(단계 0) 호기를 먼저 모두 검토하고, 모자랄 때만 단계 1, 그래도 모자라면(allowBFill) B-2차후보로 보충
-     * - 같은 단계 안에서는 먼저 비는 호기 우선(동일부품 연속가공 1일 우대),
-     *   분산형이면 방(조)당 perGroup대까지 먼저 채우고 같은 방 안에서는 다른 담당작업자를 우선
-     * - C-조건부, 일정주의(지연), 완료확인 필요 호기는 자동선택하지 않는다.
+     * 일괄배정용 호기 선택. 방마스터 기준을 최대한 지키되, 앞 단계 방이 많이 밀려 있으면 다음 단계 방을 쓴다:
+     * - 정렬 키 = 시작 가능일 + 단계 × 방 대기 허용일(기본 14일) − 동일부품 연속가공 1일.
+     *   즉 1순위 방이 다음 단계 방보다 14일 넘게 늦게 비어야 다음 단계 방을 쓴다.
+     * - 가장 앞선 후보와 같은 단계·비슷한 시기(대기 허용일 안) 호기끼리는 방(조)당 perGroup대, 다른 담당작업자 우선으로 나누고,
+     *   모자라면 정렬 순서대로 채운다.
+     * - B-2차후보는 기본 대수가 모자랄 때(allowBFill)만, C-조건부·일정주의·완료확인 필요는 자동선택하지 않는다.
      */
     batchPick(cands, count, perDays, from, partCode, allowBFill) {
       const allowB = this.opts.allowB !== false && allowBFill !== false;
       const perGroup = this.opts.allocMode === 'fast' ? 0 : this.opts.perGroupMax != null ? this.opts.perGroupMax : 1;
-      const tiers = [[], [], []];
+      const wait = this.opts.roomWaitDays != null ? this.opts.roomWaitDays : 14;
+      const pool = [];
       for (const c of cands) {
         if (c.grade[0] === 'C') continue;
         if (opPriority(c.work) === 0 || String(c.availText).includes('완료확인 필요')) continue;
+        const tier = this.roomTier(c);
+        if (tier === 3 && !allowB) continue;
         const start = this.startFor(c.machine, from, perDays, partCode);
         if (start == null) continue;
-        tiers[this.roomTier(c)].push({ c, key: start - (c.sameCont ? 1 : 0), group: this.groupOf[c.machine], worker: this.workerByMachine[c.machine] || 'm' + c.machine });
+        pool.push({ c, tier, key: start - (c.sameCont ? 1 : 0) + tier * wait, group: this.groupOf[c.machine], worker: this.workerByMachine[c.machine] || 'm' + c.machine });
       }
+      pool.sort((a, b) => a.key - b.key || b.c.score - a.c.score || a.c.rank - b.c.rank);
+      if (!pool.length) return [];
       const picked = [];
       const usedGroup = new Map();
       const usedWorker = new Set();
@@ -1245,24 +1289,23 @@
         usedGroup.set(p.group, (usedGroup.get(p.group) || 0) + 1);
         usedWorker.add(p.worker);
       };
-      for (let t = 0; t < 3 && picked.length < count; t++) {
-        if (t === 2 && !allowB) break;
-        const pool = tiers[t].sort((a, b) => a.key - b.key || b.c.score - a.c.score || a.c.rank - b.c.rank);
-        if (!perGroup) {
-          for (const p of pool) if (picked.length < count) take(p);
-          continue;
-        }
-        for (let lim = perGroup; picked.length < count && lim <= count; lim++) {
-          for (const newWorkerOnly of [true, false]) {
-            for (const p of pool) {
+      if (perGroup) {
+        const head = pool.filter((p) => p.tier === pool[0].tier && p.key <= pool[0].key + wait);
+        for (let lim = perGroup; picked.length < count && lim <= count; lim++)
+          for (const newWorkerOnly of [true, false])
+            for (const p of head) {
               if (picked.length >= count) break;
               if (picked.includes(p) || (usedGroup.get(p.group) || 0) >= lim) continue;
               if (newWorkerOnly && usedWorker.has(p.worker)) continue;
               take(p);
             }
-          }
-        }
       }
+      for (const newWorkerOnly of perGroup ? [true, false] : [false])
+        for (const p of pool) {
+          if (picked.length >= count) break;
+          if (picked.includes(p) || (newWorkerOnly && usedWorker.has(p.worker))) continue;
+          take(p);
+        }
       return picked.map((p) => p.c);
     }
 
@@ -1436,10 +1479,50 @@
         finish,
         late,
         lateAck: late > 0 && prev.lateAck && prev.ackFinish === finish ? true : false,
+        heavyAck: !!prev.heavyAck,
         ackFinish: prev.ackFinish,
         machines: ds.map((x) => x.machine),
       };
     }
+    /**
+     * 담당자 조정: 품목을 n대로 다시 배분한다(총 장비일·수량 유지 → 호기가 줄면 가공기간이 길어짐).
+     * 지금 쓰는 호기 중 먼저 시작하는 n대를 남긴다. 실패하면 원래대로 되돌린다. 반환 {ok, error}
+     */
+    reshapeItem(key, n) {
+      const item = this.itemByKey[key];
+      const ds = this.drafts.filter((d) => d.itemKey === key).sort((a, b) => a.start - b.start || a.machine - b.machine);
+      n = Math.max(1, Math.round(n));
+      if (!item || !ds.length) return { ok: false, error: '가배정이 없습니다' };
+      const machines = [...new Set(ds.map((d) => d.machine))].slice(0, n);
+      const qty = ds.reduce((a, d) => a + d.qty, 0);
+      const days = ds.reduce((a, d) => a + d.days, 0);
+      const backup = ds.map((d) => Object.assign({}, d));
+      const prevResult = this.results[key];
+      this.removeDraftsForItem(key);
+      const allocs = this.allocate(machines, qty, days, Math.min(...backup.map((d) => d.start)), item.partCode);
+      if (!allocs) {
+        for (const d of backup) this.addDrafts(item, [d], { auto: d.auto, manual: d.manual, grade: d.grade });
+        this.results[key] = prevResult;
+        return { ok: false, error: '배정 가능한 빈 구간이 없습니다' };
+      }
+      this.addDrafts(item, allocs, { auto: false, manual: true });
+      this._refreshResult(key, '수기가배정');
+      this.results[key].heavyAck = true;
+      return { ok: true, machines: allocs.length, finish: Math.max(...allocs.map((a) => a.end)) };
+    }
+    /** 호기 다수 점유 품목: 가배정 호기 수가 기준(heavyMachines, 기본 5) 이상이고 담당자가 아직 검토하지 않음. */
+    isHeavy(key) {
+      const r = this.results[key];
+      const n = new Set(this.drafts.filter((d) => d.itemKey === key).map((d) => d.machine)).size;
+      return n >= (this.opts.heavyMachines || 5) && !(r && r.heavyAck);
+    }
+    ackHeavy(key, on) {
+      const r = this.results[key];
+      if (!r) return false;
+      r.heavyAck = !!on;
+      return true;
+    }
+
     /** 납기초과를 담당자가 확인함(목록에서 '지연확인'으로 분리). 일정이 바뀌면 다시 확인 필요. */
     ackLate(key, on) {
       const r = this.results[key];
@@ -1661,6 +1744,7 @@
     parseRecRange,
     materialGroup,
     parseMaterialMap,
+    parseRoomRules,
     exactMaterial,
     settingFamily,
     settingMatch,
