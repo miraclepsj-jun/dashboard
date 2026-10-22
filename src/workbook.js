@@ -25,6 +25,8 @@
     bgRules: 'BG전용기준',
     bdSpecs: 'BD규격마스터',
     confirmed: '설비배정_확정',
+    holidays: '휴일마스터',
+    matExclusions: '재질호기제외',
   };
 
   function norm(h) {
@@ -293,6 +295,34 @@
       .map((r) => ({ room: str(at(r, c.room)), odMin: at(r, c.odMin), odMax: at(r, c.odMax), cond: str(at(r, c.cond)) }));
   }
 
+  /** 23_휴일마스터: A열 날짜, B열 '휴일'(또는 Y/HOLIDAY)인 날만 휴일. 토·일은 달력에서 자동 휴무. */
+  function readHolidays(rows) {
+    const hm = headerMap(rows, '날짜');
+    if (!hm) return [];
+    const cD = col(hm, '날짜');
+    const cK = col(hm, '구분');
+    const cN = col(hm, '비고');
+    const out = [];
+    for (let r = hm.start; r < rows.length; r++) {
+      const row = rows[r];
+      const d = toSerial(at(row, cD));
+      const k = E.up(at(row, cK));
+      if (d != null && (k === '휴일' || k === 'Y' || k === 'HOLIDAY')) out.push({ date: d, note: str(at(row, cN)) || '휴일' });
+    }
+    return out;
+  }
+
+  /** 28_재질호기제외: 호기·제외재질(재질명/계열/*) – 추천과 수기배정 모두 차단 */
+  function readMatExclusions(rows) {
+    const hm = headerMap(rows, '제외재질');
+    if (!hm) return [];
+    const c = { machine: col(hm, '호기'), material: col(hm, '제외재질'), note: col(hm, '사유/현장확인', '사유') };
+    return rows
+      .slice(hm.start)
+      .filter((r) => r && str(at(r, c.machine)) && str(at(r, c.material)))
+      .map((r) => ({ machine: E.machineNo(at(r, c.machine)), material: E.up(at(r, c.material)), note: str(at(r, c.note)) }));
+  }
+
   function readBDSpecs(rows) {
     const hm = headerMap(rows, 'BD외경');
     if (!hm) return [];
@@ -356,10 +386,10 @@
   function readWorkbook(data) {
     const XLSX = getXLSX();
     const wb = XLSX.read(data, { type: data instanceof ArrayBuffer || ArrayBuffer.isView(data) ? 'array' : 'buffer', cellDates: false, bookVBA: false });
-    const model = { raw: [], rooms: [], machines: [], rules: [], productivity: [], workers: [], bgRules: [], bdSpecs: [], confirmed: [] };
+    const model = { raw: [], rooms: [], machines: [], rules: [], productivity: [], workers: [], bgRules: [], bdSpecs: [], confirmed: [], holidays: [], matExclusions: [] };
     const warnings = [];
     const found = {};
-    const readers = { raw: parseRawRows, rooms: readRooms, machines: readMachines, rules: readRules, productivity: readProductivity, workers: readWorkers, bgRules: readBGRules, bdSpecs: readBDSpecs, confirmed: readConfirmed };
+    const readers = { raw: parseRawRows, rooms: readRooms, machines: readMachines, rules: readRules, productivity: readProductivity, workers: readWorkers, bgRules: readBGRules, bdSpecs: readBDSpecs, confirmed: readConfirmed, holidays: readHolidays, matExclusions: readMatExclusions };
     for (const [k, base] of Object.entries(SHEETS)) {
       const name = findSheet(wb, base);
       found[k] = name;

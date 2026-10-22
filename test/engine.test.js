@@ -333,3 +333,65 @@ test('방 허용 확장: 규칙에 지정한 방도 후보가 되고, 1순위 �
   assert.equal(ext.groupOf[ext.drafts[0].machine], '4번방');
   assert.ok(ext.drafts[0].start < strict.drafts[0].start);
 });
+
+test('근무일 달력: 토·일·휴일을 건너뛰고 근무일수로 완료일·빈 구간 계산', () => {
+  // 2026-10-09(금) 한글날 휴일, 10-10/11 주말
+  const cal = new E.Calendar({ workdays: true, holidays: [{ date: E.serialFromYMD(2026, 10, 9), note: '한글날' }] });
+  const d = (m, dd) => E.serialFromYMD(2026, m, dd);
+  assert.equal(cal.isWork(d(10, 8)), true);
+  assert.equal(cal.isWork(d(10, 9)), false);
+  assert.equal(cal.nextWork(d(10, 9)), d(10, 12));
+  assert.equal(cal.finish(d(10, 7), 3), d(10, 12)); // 7,8,(9휴),(10,11주말),12
+  assert.equal(cal.count(d(10, 5), d(10, 16)), 9);
+  const tl = new E.Timeline([{ machine: '1', start: d(10, 13), end: d(10, 14), qty: 1 }], { today: d(10, 6), cal });
+  assert.equal(tl.gapStart('1', d(10, 7), 3), d(10, 7)); // 7,8,12 → 13 전에 끝
+  assert.equal(tl.gapStart('1', d(10, 7), 4), d(10, 15)); // 4일은 안 들어감
+  const m = Demo.build(d(10, 6));
+  m.holidays = [{ date: d(10, 9), note: '한글날' }];
+  m.raw = [{ planNo: 'W1', productCode: 'A', partCode: 'PLDB301AR-B', qty: 20000, received: 0, reqDate: d(10, 30), material: 'SK-4' }];
+  const P = new E.Planner(m, { today: d(10, 6) });
+  assert.equal(P.cal.workdays, true);
+  assert.equal(P.baseDate, d(10, 7));
+  P.autoPlan();
+  const x = P.drafts[0];
+  assert.equal(x.end, P.cal.finish(x.start, x.days));
+  assert.ok(P.cal.isWork(x.start));
+  // 토요일 기준게시일 → 월요일
+  assert.equal(new E.Planner(m, { today: d(10, 6), baseDate: d(10, 10) }).baseDate, d(10, 12));
+});
+
+test('재질호기제외: 28번 지정·전용구분 아세탈/BG 호기는 추천과 수기배정 모두 차단', () => {
+  const m = Demo.build(TODAY);
+  m.raw = [{ planNo: 'M1', productCode: 'A', partCode: 'PLDB401AR-B', qty: 5000, received: 0, reqDate: TODAY + 20, material: 'SK-4' }];
+  m.matExclusions = [{ machine: '1', material: 'SK-4' }, { machine: '2', material: 'SK' }];
+  m.machines.find((x) => x.no === '3').exclusiveType = '아세탈';
+  const P = new E.Planner(m, { today: TODAY });
+  const c = P.candidates(P.items[0]).candidates.map((x) => x.machine);
+  for (const no of ['1', '2', '3']) assert.ok(!c.includes(no), no + '호기는 제외');
+  assert.ok(c.includes('4'));
+  assert.equal(P.checkMachines(P.items[0], ['1', '4']).length, 1);
+  assert.match(P.checkMachines(P.items[0], ['999'])[0], /설비마스터에 없음/);
+});
+
+test('묶음배정: 같은 부품·재질 발주를 호기 1대에 발주일순으로 이어서', () => {
+  const m = Demo.build(TODAY);
+  m.raw = [
+    { planNo: 'G1', productCode: 'A', partCode: 'PLDB701AR-B', qty: 4000, received: 0, orderDate: TODAY - 9, material: 'SK-4' },
+    { planNo: 'G2', productCode: 'B', partCode: 'PLDB701AR-B', qty: 6000, received: 0, orderDate: TODAY - 5, material: 'SK-4' },
+    { planNo: 'G3', productCode: 'C', partCode: 'PLDB701AR-B', qty: 5000, received: 0, orderDate: TODAY - 7, material: 'C1730' },
+  ];
+  const P = new E.Planner(m, { today: TODAY });
+  const pool = P.poolCandidates(P.items[0]);
+  assert.deepEqual(pool.map((x) => x.planNo), ['G1', 'G2']); // 재질 다른 G3 제외, 발주일순
+  const r = P.poolAssign(pool, '4');
+  assert.equal(r.ok, true);
+  assert.equal(r.days, 3); // 올림(10000/5000)+1
+  const ds = P.drafts.slice().sort((a, b) => a.start - b.start);
+  assert.deepEqual(ds.map((d) => d.planNo), ['G1', 'G2']);
+  assert.ok(ds[1].start > ds[0].end);
+  assert.equal(ds.reduce((a, d) => a + d.days, 0), 3);
+  assert.equal(P.confirmRows().find((x) => x.planNo === 'G2').newSetup, 'N'); // 이어서 가공 → 신규셋팅 아님
+  assert.equal(P.poolAssign(pool, '4').ok, false); // 이미 배정됨
+  const P2 = new E.Planner(m, { today: TODAY });
+  assert.equal(P2.poolAssign(P2.poolCandidates(P2.items[0]), '4', 1).ok, false); // 하루로는 1만 개 불가
+});

@@ -21,8 +21,8 @@
     { key: 'b3', label: '5만~15만', max: 150000 },
     { key: 'b4', label: '15만 이상', max: Infinity },
   ];
-  // 가공1팀 수기 간트(2026-09-28~11월) 학습값: 수기 장비일 ÷ 기준 장비일의 중앙값
-  const DEFAULT_FACTORS = { b1: 0.5, b2: 1.4, b3: 1.45, b4: 1.2 };
+  // 가공1팀 수기 간트(2026-09-28~11월) 학습값: 수기 근무일 ÷ 기준 장비일의 중앙값 (토·일·23번 휴일 제외)
+  const DEFAULT_FACTORS = { b1: 0.5, b2: 1, b3: 1, b4: 0.8 };
   function bandOf(qty) {
     const k = E.qtyBand(qty);
     return BANDS.find((b) => b.key === k);
@@ -59,17 +59,30 @@
     return out;
   }
 
-  /** 첫 날짜 칸의 "일"만 있으므로 기준일(today)에 가장 가까운 연·월로 추정한다. */
-  function guessFirstDate(day, today) {
+  /**
+   * 첫 날짜 칸은 "일"만 있으므로 연·월을 추정한다.
+   * 머리행에서 월이 바뀌는 지점(30→1 등)으로 첫 달의 일수를 알아내 그 일수인 달만 후보로 두고,
+   * 오늘보다 일주일 넘게 미래가 아닌 날 중 오늘에 가장 가까운 날을 고른다 (수기 간트는 보통 지난 날부터 시작).
+   */
+  function guessFirstDate(day, today, seq) {
+    let monthLen = null;
+    for (let i = 1; seq && i < seq.length; i++) if (seq[i] === 1 && seq[i - 1] >= 28) {
+      monthLen = seq[i - 1];
+      break;
+    }
     const t = E.dateFromSerial(today);
-    let best = null;
-    for (let dm = -2; dm <= 1; dm++) {
+    const cands = [];
+    for (let dm = -6; dm <= 2; dm++) {
       const d = new Date(t.getFullYear(), t.getMonth() + dm, day);
       if (d.getDate() !== day) continue;
-      const s = E.serialFromDate(d);
-      if (best == null || Math.abs(s - today) < Math.abs(best - today)) best = s;
+      const len = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      if (monthLen && len !== monthLen) continue;
+      cands.push(E.serialFromDate(d));
     }
-    return best;
+    if (!cands.length) return null;
+    const past = cands.filter((s) => s <= today + 7);
+    const pool = past.length ? past : cands;
+    return pool.reduce((b, s) => (Math.abs(s - today) < Math.abs(b - today) ? s : b));
   }
 
   /**
@@ -105,7 +118,7 @@
         prev = v;
       }
       if (cols.length < 5) continue;
-      if (firstDate == null) firstDate = guessFirstDate(cell(0, cols[0]).v, today);
+      if (firstDate == null) firstDate = guessFirstDate(cell(0, cols[0]).v, today, cols.map((c) => cell(0, c).v));
       horizon = Math.max(horizon, cols.length);
       const headNames = [];
       for (let c = 1; c < cols[0]; c++) headNames.push(str(cell(0, c) && cell(0, c).v));
@@ -194,7 +207,8 @@
       if (!qty || !inside(l)) continue;
       const b = bands.find((x) => x.key === bandOf(qty).key);
       const n = new Set(l.map((s) => s.machine)).size;
-      const md = l.reduce((a, s) => a + s.days, 0);
+      // 계획 엔진과 같은 기준(근무일 달력)으로 센다. 휴일마스터가 없으면 달력일.
+      const md = l.reduce((a, s) => a + Math.max(1, planner.cal ? planner.cal.count(s.startDate, s.endDate) : s.days), 0);
       b.jobs++;
       b.machines.push(n);
       b.run.push(Math.round(md / n));

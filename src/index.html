@@ -39,7 +39,8 @@
     <button role="tab" class="tab" data-tab="gantt" aria-selected="false" id="tab-gantt">간트차트</button>
     <button role="tab" class="tab" data-tab="review" aria-selected="false" id="tab-review">수기검토 <span class="count" id="reviewCount"></span></button>
     <button role="tab" class="tab" data-tab="master" aria-selected="false" id="tab-master">기준 점검</button>
-    <button role="tab" class="tab" data-tab="learn" aria-selected="false" id="tab-learn">현장 학습</button>
+    <button role="tab" class="tab" data-tab="learn" aria-selected="false" id="tab-learn">수기 일정·학습</button>
+    <button role="tab" class="tab" data-tab="print" aria-selected="false" id="tab-print">현장 출력</button>
   </nav>
 
   <main>
@@ -93,7 +94,22 @@
         <input type="date" id="learnFirst" aria-label="수기 간트 첫 날짜">
         <span class="hint">방별 시트(행=호기, 열=날짜, 시작칸에 "부품코드/수량K(같이 도는 호기)" + 색칠 구간)를 읽습니다. 날짜 칸에는 "일"만 있으므로 첫 칸 날짜가 다르면 직접 입력하세요.</span>
       </div>
+      <div class="master" id="manualBody"></div>
       <div class="master" id="learnBody"></div>
+    </section>
+
+    <section class="panel" id="panel-print" hidden>
+      <div class="toolbar no-print">
+        <label class="check" for="prDate">기준일</label><input type="date" id="prDate">
+        <select id="prRoom" aria-label="방 선택"></select>
+        <select id="prSpan" aria-label="간트 기간"><option value="7">7일</option><option value="14" selected>14일</option><option value="21">21일</option></select>
+        <label class="check"><input type="checkbox" id="prDrafts" checked> 가배정 포함</label>
+        <span class="spacer"></span>
+        <button class="btn" type="button" id="prPrint">인쇄</button>
+        <button class="btn" type="button" id="prExcel">엑셀 저장</button>
+      </div>
+      <p class="hint no-print">일일 생산지시서와 반장용 2주 간트입니다. 금일계획 = 배정총량 ÷ 가공 근무일, 누적실적이 입력되면 잔량 ÷ 남은 근무일 (토·일·23번 휴일은 0). 지시수량은 반장이 확인하세요. 원본 통합문서는 바꾸지 않습니다.</p>
+      <div id="printBody" class="print-body"></div>
     </section>
 
     <section class="panel" id="panel-master" hidden>
@@ -152,6 +168,8 @@
       <select id="setDelay"><option value="block">완료확인 전 신규배정 금지 (기존 방식)</option><option value="assumeDone">계획완료일에 끝난 것으로 간주</option></select>
       <label for="setActualOk">완료 판정에 실적확인=Y 필요</label>
       <select id="setActualOk"><option value="0">아니오 (누적실적 ≥ 계획수량)</option><option value="1">예</option></select>
+      <label for="setCalendar">가공일 계산</label>
+      <select id="setCalendar"><option value="work">근무일 – 토·일과 23_휴일마스터 휴일 제외</option><option value="auto">휴일마스터가 있을 때만 근무일</option><option value="calendar">달력일 – 모든 날 가공</option></select>
       <label for="setPeriodOn">가공기간 보정 (현장 학습)</label>
       <select id="setPeriodOn"><option value="1">적용 – 기준 장비일수 × 수량대별 계수</option><option value="0">적용 안 함 – 6_생산성기준 그대로</option></select>
       <label for="setPF1">보정계수 1만 미만 / 1만~5만</label>
@@ -183,4 +201,6 @@
 <script>/*__WORKBOOK__*/</script>
 <script>/*__DEMO__*/</script>
 <script>/*__LEARN__*/</script>
+<script>/*__MANUAL__*/</script>
+<script>/*__PRINT__*/</script>
 <script>/*__APP_JS__*/</script>

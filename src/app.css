@@ -287,3 +287,31 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .mcard.wide { grid-column: 1 / -1; }
 #learnFirst { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .mcard { align-content: start; }
+.cands { display: grid; gap: 4px; min-width: 280px; }
+.cands .check { white-space: normal; }
+
+/* 현장 출력 */
+.print-body { display: grid; gap: 16px; }
+.sheet { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+.sheet h2 { margin: 0; font-size: 15px; }
+.sheet h3 { margin: 6px 0 0; font-size: 13px; }
+.ptable th.pd { width: 22px; padding: 4px 0; text-align: center; font-family: var(--mono); }
+.ptable th.pd.off { background: var(--weekend); color: var(--muted); }
+.ptable td.pc { padding: 0; width: 22px; border-left: 1px solid var(--line-soft); }
+.ptable td.c1 { background: var(--confirmed); }
+.ptable td.c2 { background: repeating-linear-gradient(45deg, var(--confirmed) 0 3px, var(--weekend) 3px 6px); }
+.ptable td.c3 { background: var(--weekend); }
+.ptable td.blank { min-width: 54px; border: 1px solid var(--line); }
+.ptable tr.emptyrow td { color: var(--muted); }
+@media print {
+  @page { size: A4 landscape; margin: 8mm; }
+  body { background: #fff; color: #000; }
+  .topbar, .flow, .kpis, .tabs, .no-print, .drawer, .toast, #panel-items, #panel-gantt, #panel-review, #panel-master, #panel-learn { display: none !important; }
+  .app { padding: 0; max-width: none; }
+  .sheet { border: 0; padding: 0; break-after: page; }
+  .table-wrap { overflow: visible; border: 0; }
+  .ptable { font-size: 9.5px; }
+  .ptable td, .ptable th { padding: 2px 4px; border: 1px solid #999; }
+  .ptable td.c1 { background: #5a7fa6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .ptable td.c2, .ptable td.c3, .ptable th.pd.off { background: #ddd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

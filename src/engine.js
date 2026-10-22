@@ -480,12 +480,79 @@
    * - 확정(9_설비배정_확정)은 실적 완료 시 실제완료일까지만 점유
    * - 오늘 기준 가장 최근 시작 구간이 계획완료일을 지났는데 미완료이면 "지연진행" → 완료확인 전 신규배정 불가
    */
+  /**
+   * 근무일 달력 (v676 23_휴일마스터): 토·일과 '휴일' 지정일은 쉬는 날.
+   * workdays=false면 모든 날을 근무일로 본다(기존 달력일 기준).
+   */
+  class Calendar {
+    constructor(opts) {
+      opts = opts || {};
+      this.workdays = !!opts.workdays;
+      this.holidays = new Set((opts.holidays || []).map((h) => (typeof h === 'number' ? h : h.date)).filter((d) => d != null));
+      this.labels = {};
+      for (const h of opts.holidays || []) if (h && typeof h === 'object' && h.date != null) this.labels[h.date] = h.note || '휴일';
+      this._t = null;
+    }
+    _raw(d) {
+      const wd = dateFromSerial(d).getDay();
+      return wd !== 0 && wd !== 6 && !this.holidays.has(d);
+    }
+    /** 근무일 순번표 (기준일 ±수년)를 한 번 만들어 완료일·근무일수 계산을 O(1)로 */
+    _table(d) {
+      if (this._t && d >= this._t.lo && d < this._t.hi) return this._t;
+      const lo = Math.min(d, this._t ? this._t.lo : d) - 400;
+      const hi = Math.max(d, this._t ? this._t.hi : d) + 2000;
+      const cum = new Int32Array(hi - lo + 1); // cum[i] = lo+i 이전 근무일 수
+      const days = [];
+      for (let x = lo; x < hi; x++) {
+        cum[x - lo + 1] = cum[x - lo] + (this._raw(x) ? 1 : 0);
+        if (this._raw(x)) days.push(x);
+      }
+      return (this._t = { lo, hi, cum, days });
+    }
+    isWork(d) {
+      if (!this.workdays) return true;
+      const t = this._table(d);
+      return t.cum[d - t.lo + 1] > t.cum[d - t.lo];
+    }
+    /** d 이후(포함) 첫 근무일 */
+    nextWork(d) {
+      d = Math.floor(d);
+      if (!this.workdays) return d;
+      const t = this._table(d);
+      return t.days[t.cum[d - t.lo]];
+    }
+    /** start부터 n번째 근무일 (start가 쉬는 날이면 다음 근무일부터 센다) */
+    finish(start, n) {
+      n = Math.max(1, Math.round(n));
+      start = Math.floor(start);
+      if (!this.workdays) return start + n - 1;
+      let t = this._table(start);
+      let k = t.cum[start - t.lo] + n - 1;
+      if (k >= t.days.length) t = this._table(start + n * 2 + 30);
+      k = t.cum[start - t.lo] + n - 1;
+      return t.days[k];
+    }
+    /** [a, b] 사이 근무일 수 */
+    count(a, b) {
+      a = Math.floor(a);
+      b = Math.floor(b);
+      if (b < a) return 0;
+      if (!this.workdays) return b - a + 1;
+      this._table(a);
+      const t = this._table(b);
+      return t.cum[b - t.lo + 1] - t.cum[a - t.lo];
+    }
+  }
+  const ALL_DAYS = new Calendar({ workdays: false });
+
   class Timeline {
     constructor(confirmed, opts) {
       this.today = (opts && opts.today) || todaySerial();
       this.requireActualOk = !!(opts && opts.requireActualOk);
       this.delayPolicy = (opts && opts.delayPolicy) || 'block'; // 'block' | 'assumeDone'
       this.blocks = (opts && opts.blocks) || {}; // machine -> [{s,e,label}] (고장 등)
+      this.cal = (opts && opts.cal) || ALL_DAYS;
       this.byMachine = new Map();
       (confirmed || []).forEach((c, i) => this._addConfirmed(c, i));
       for (const list of this.byMachine.values()) list.sort((a, b) => a.s - b.s || a.e - b.e);
@@ -586,24 +653,26 @@
      */
     gapStart(m, from, requiredDays) {
       requiredDays = Math.max(1, requiredDays || 1);
-      let cand = Math.max(this.today, from);
+      const cal = this.cal;
+      let cand = cal.nextWork(Math.max(this.today, from));
       if (this.status(m).delayed) return null;
       const segs = this._occupied(m);
       for (let guard = 0; guard < segs.length + 5; guard++) {
         let moved = false;
         for (const x of segs) {
           if (x.s <= cand && x.e >= cand) {
-            cand = x.e + 1;
+            cand = cal.nextWork(x.e + 1);
             moved = true;
           }
         }
         if (moved) continue;
         let next = null;
         for (const x of segs) if (x.s > cand && (next == null || x.s < next)) next = x.s;
-        if (next == null || cand + requiredDays - 1 < next) return cand;
+        // 필요한 근무일수를 다음 일정 전에 다 채울 수 있어야 한다
+        if (next == null || cal.finish(cand, requiredDays) < next) return cand;
         let blockEnd = next;
         for (const x of segs) if (x.s === next && x.e > blockEnd) blockEnd = x.e;
-        cand = blockEnd + 1;
+        cand = cal.nextWork(blockEnd + 1);
       }
       return cand;
     }
@@ -619,11 +688,12 @@
       const score = delta <= 0 ? 8 : delta <= 3 ? 6 : delta <= 7 ? 4 : delta <= 14 ? 2 : 0;
       return { text, score, start, status: st };
     }
-    /** start 직전(=start-1)에 끝나는 구간. 동일부품 연속가공 판단용. */
+    /** day(=시작일-1) 이전 마지막 구간이 그 사이 근무일 없이 바로 이어지면 반환. 동일부품 연속가공 판단용. */
     prevSegmentEndingAt(m, day) {
       let best = null;
-      for (const seg of this.segments(m)) if (seg.e < day + 1 && (!best || seg.e > best.e)) best = seg;
-      return best && best.e === day ? best : null;
+      for (const seg of this.segments(m)) if (seg.e <= day && (!best || seg.e > best.e)) best = seg;
+      if (!best) return null;
+      return best.e === day || this.cal.count(best.e + 1, day) === 0 ? best : null;
     }
     lastEnd(m) {
       let e = null;
@@ -714,7 +784,17 @@
       this.model = model;
       this.opts = opts;
       this.today = opts.today || todaySerial();
-      this.baseDate = opts.baseDate != null ? opts.baseDate : this.today + 1;
+      // 근무일 달력: 휴일마스터가 있으면(또는 calendarMode='work') 토·일·휴일 제외
+      const mode = opts.calendarMode || 'auto';
+      this.cal = new Calendar({ workdays: mode === 'work' || (mode === 'auto' && (model.holidays || []).length > 0), holidays: model.holidays || [] });
+      // v732: 신규 배정은 오늘 다음 근무일부터
+      this.baseDate = this.cal.nextWork(opts.baseDate != null ? opts.baseDate : this.today + 1);
+      // 수기 일정 이관(담당자 수기 간트 → 정상 판정 행)은 9번 확정과 같은 현행 일정으로 쓴다
+      this.manualRows = (opts.manualConfirmed || []).slice();
+      if (this.manualRows.length) {
+        model = Object.assign({}, model, { confirmed: (model.confirmed || []).concat(this.manualRows) });
+        this.model = model;
+      }
       // v670 초기일정이관: 9번 확정일정이 하나도 없으면 원본의 설비1~A + 개시/완료를 현행 일정으로 쓴다
       this.initial = { used: false, rows: [], skipped: [] };
       if (!(model.confirmed || []).length && opts.useProgramAssignments !== false) {
@@ -748,6 +828,8 @@
         }
       }
       this._buildGroups(model);
+      this.matExclusions = {};
+      for (const x of model.matExclusions || []) (this.matExclusions[machineNo(x.machine)] = this.matExclusions[machineNo(x.machine)] || []).push(up(x.material));
       this.roomRules = parseRoomRules(opts.roomRules);
       // 확정행의 재질(동일부품 연속가공 판단용)은 원본 품목에서 찾는다.
       const confirmed = (model.confirmed || []).map((c) => {
@@ -759,6 +841,7 @@
         requireActualOk: opts.requireActualOk,
         delayPolicy: opts.delayPolicy,
         blocks: buildBlocks(model.workers, opts.hardBlockKeywords),
+        cal: this.cal,
       });
       this._rebuildSetupCount();
       this.drafts = []; // {id, itemKey, machine, start, end, days, qty, auto, note}
@@ -860,7 +943,8 @@
     candidates(item, opts) {
       opts = opts || {};
       const from = opts.from != null ? opts.from : this.baseDate;
-      const diag = { total: 0, room: 0, sched: 0, tech: 0, existing: 0, bdOd: 0, bdLen: 0 };
+      const diag = { total: 0, room: 0, sched: 0, tech: 0, existing: 0, bdOd: 0, bdLen: 0, matExcl: 0 };
+      const roomCache = new Map();
       const out = [];
       const main = up(item.main);
       let bd = null;
@@ -872,7 +956,9 @@
       for (const mc of this.machines) {
         diag.total++;
         const room = this.rooms[str(mc.room)];
-        const re = roomEligible(room, item) || this._roomExtension(room, item);
+        // 방 판정은 방마다 한 번만 (호기 800대 × 품목마다 반복하지 않음)
+        let re = roomCache.get(mc.room);
+        if (re === undefined) roomCache.set(mc.room, (re = roomEligible(room, item) || this._roomExtension(room, item)));
         if (!re) continue;
         diag.room++;
         if (isExplicitNo(mc.scheduleTarget) || isExplicitNo(mc.newSetupOk)) continue;
@@ -924,6 +1010,10 @@
         }
         if (tech && up(item.partCode).includes('U') && !up(mc.model).includes('P033')) tech = false;
         if (!tech) continue;
+        if (this.materialForbidden(mc.no, item)) {
+          diag.matExcl++;
+          continue;
+        }
         diag.tech++;
         if (existing.has(mc.no)) {
           diag.existing++;
@@ -1009,6 +1099,7 @@
         if (item.main === 'BD' && bd && bd.status === '정상') return 'BD 규격범위 초과 - 외경 ' + bd.od + ' / 길이 ' + bd.len;
         return '설비마스터 기술가능(' + item.main + ') 기준 통과 0대';
       }
+      if (diag.tech === 0 && diag.matExcl > 0) return '재질호기제외로 후보 0대 (28_재질호기제외 / 설비마스터 전용구분)';
       if (diag.existing > 0 && diag.existing === diag.tech) return '기존 배정호기 제외 후 신규 추천후보 0대';
       return '후보 생성 후 최종 통과 0대 - 기준 점검 필요';
     }
@@ -1077,7 +1168,7 @@
           let bestFin = 0;
           for (let i = 0; i < ms.length; i++) {
             if (!valid[i]) continue;
-            const fin = start[i] + days[i];
+            const fin = this.cal.finish(start[i], days[i] + 1);
             if (best < 0 || fin < bestFin || (fin === bestFin && days[i] < days[best])) {
               best = i;
               bestFin = fin;
@@ -1124,7 +1215,7 @@
       const res = [];
       for (let i = 0; i < ms.length; i++) {
         if (!valid[i] || days[i] <= 0) continue;
-        res.push({ machine: ms[i], start: start[i], end: start[i] + days[i] - 1, days: days[i], qty: qty[i] });
+        res.push({ machine: ms[i], start: start[i], end: this.cal.finish(start[i], days[i]), days: days[i], qty: qty[i] });
       }
       return res;
     }
@@ -1224,7 +1315,8 @@
       }
       const minRun = Math.max(1, this.opts.minRunDays || 7);
       const maxRun = Math.max(minRun, this.opts.maxRunDays || 30);
-      const toDue = item.due != null ? item.due - this.baseDate + 1 : null;
+      // 요청일까지 남은 근무일
+      const toDue = item.due != null ? this.cal.count(this.baseDate, item.due) : null;
       const target = Math.min(Math.max(toDue == null ? maxRun : toDue, minRun), maxRun);
       const n = Math.min(Math.max(1, Math.ceil(days / target)), maxMachines);
       const canExpand = this.opts.expandToDue !== false && toDue != null && toDue >= minRun;
@@ -1378,6 +1470,37 @@
     }
 
     /** 수기 가배정: 담당자가 고른 호기로 잔량 배분. */
+    /**
+     * v732 재질-호기 제외: 28_재질호기제외(호기|재질, 호기|계열, 호기|*)와
+     * 4_설비마스터 전용구분(아세탈 → 아세탈 재질만, BG → BG 품목만).
+     */
+    materialForbidden(m, item) {
+      const mat = up(item.material);
+      const grp = up(item.matGroup);
+      for (const x of this.matExclusions[m] || []) if (x === '*' || x === mat || (grp && x === grp)) return true;
+      const mc = this.machineByNo[m];
+      const ded = mc ? up(mc.exclusiveType) : '';
+      if (ded === '아세탈' || ded === 'ACETAL') return !(mat.includes('아세탈') || mat.includes('ACETAL'));
+      if (ded === 'BG') return !(item.main === 'BG' || mat.startsWith('BG'));
+      return false;
+    }
+    /** 담당자가 직접 입력한 호기 검사: 설비마스터 미등록, 재질호기제외, 대분류 가공불가, 완료확인 필요. 반환 [오류문구] */
+    checkMachines(item, machines) {
+      const errs = [];
+      for (const m of machines.map(machineNo)) {
+        const mc = this.machineByNo[m];
+        if (!mc) {
+          errs.push(m + '호기: 설비마스터에 없음');
+          continue;
+        }
+        if (this.materialForbidden(m, item)) errs.push(m + '호기: ' + (item.material || '') + ' 재질 사용 금지 (28_재질호기제외/전용구분)');
+        const ok = { PL: mc.plOk, TE: mc.teOk, BD: mc.bdOk }[item.main];
+        if (ok !== undefined && !isYes(ok)) errs.push(m + '호기: ' + item.main + ' 가공가능 설비 아님');
+        if (this.timeline.status(m).delayed) errs.push(m + '호기: 완료확인 필요 (9번 실적 입력)');
+      }
+      return errs;
+    }
+
     manualAssign(item, machines, opts) {
       const qty = opts && opts.qty > 0 ? Math.min(opts.qty, this.workQty(item) || opts.qty) : this.workQty(item);
       const days = opts && opts.days > 0 ? opts.days : this.planDays(item, qty) || 1;
@@ -1405,12 +1528,16 @@
       if (!d) return { ok: false, error: '가배정을 찾을 수 없습니다' };
       const m = change.machine != null ? machineNo(change.machine) : d.machine;
       if (!this.machineByNo[m]) return { ok: false, error: m + '호기는 설비마스터에 없습니다' };
-      const start = change.start != null ? change.start : d.start;
+      const start = this.cal.nextWork(change.start != null ? change.start : d.start);
       const days = Math.max(1, Math.round(change.days != null ? change.days : d.days));
       const qty = change.qty != null ? Math.max(0, Math.round(change.qty)) : d.qty;
-      const end = start + days - 1;
+      const end = this.cal.finish(start, days);
       if (start < this.today) return { ok: false, error: '시작일이 오늘보다 빠릅니다' };
       if (this.timeline.status(m).delayed) return { ok: false, error: m + '호기는 완료확인 필요 상태입니다 (9번 시트 실적 입력 필요)' };
+      if (m !== d.machine) {
+        const errs = this.checkMachines(this.itemByKey[d.itemKey] || {}, [m]);
+        if (errs.length) return { ok: false, error: errs.join(' / ') };
+      }
       // 겹치는 뒤쪽 가배정은 pushNext면 길이를 유지한 채 뒤로 민다(확정·고장 일정은 움직이지 않음)
       const moves = [];
       let cursor = end;
@@ -1510,6 +1637,49 @@
       this.results[key].heavyAck = true;
       return { ok: true, machines: allocs.length, finish: Math.max(...allocs.map((a) => a.end)) };
     }
+    /** v732 묶음배정 후보: 같은 부품·재질·대분류·생산성분류·일생산량이고 남은 수량이 있는 발주 (발주일순) */
+    poolCandidates(item) {
+      return this.items
+        .filter((it) => it.dupOf == null && up(it.partCode) === up(item.partCode) && up(it.material) === up(item.material) && it.main === item.main && it.prod === item.prod && it.daily === item.daily && it.daily > 0 && this.workQty(it) > 0)
+        .sort((a, b) => (a.orderDate || 0) - (b.orderDate || 0) || (a.due || 1e9) - (b.due || 1e9));
+    }
+    /**
+     * v732 묶음배정: 여러 발주를 호기 1대에 발주일순으로 이어서 배정(셋팅 1회).
+     * 작업일 = 올림(묶음 총량 ÷ 일생산량) + 1(첫 셋팅), workdays로 바꿀 수 있다. 반환 {ok, error, rows}
+     */
+    poolAssign(items, m, workdays) {
+      m = machineNo(m);
+      if (!m) return { ok: false, error: '묶음배정할 호기를 입력하세요' };
+      if (items.length < 2 || items.length > 20) return { ok: false, error: '묶음은 발주 2~20건' };
+      const errs = this.checkMachines(items[0], [m]);
+      if (errs.length) return { ok: false, error: errs.join(' / ') };
+      const parts = items.map((it) => ({ it, q: this.workQty(it) })).filter((x) => x.q > 0);
+      const total = parts.reduce((a, x) => a + x.q, 0);
+      if (parts.length < 2) return { ok: false, error: '남은 수량이 있는 발주가 2건 미만입니다' };
+      const daily = items[0].daily;
+      const days = workdays > 0 ? Math.round(workdays) : Math.ceil(total / daily) + 1;
+      if (daily * days < total) return { ok: false, error: days + '일로는 묶음 총량 ' + total.toLocaleString('ko-KR') + '개를 만들 수 없습니다 (일생산 ' + daily + ')' };
+      let start = this.startFor(m, this.baseDate, days, items[0].partCode);
+      if (start == null) return { ok: false, error: m + '호기에 ' + days + '근무일 빈 구간이 없습니다' };
+      const rows = [];
+      let used = 0;
+      parts.forEach((x, i) => {
+        const d = i === parts.length - 1 ? days - used : Math.max(1, Math.round((days * x.q) / total));
+        const end = this.cal.finish(start, d);
+        rows.push({ it: x.it, alloc: { machine: m, start, end, days: d, qty: x.q } });
+        used += d;
+        start = this.cal.nextWork(end + 1);
+      });
+      for (const r of rows) {
+        this.removeDraftsForItem(r.it.key);
+        this.addDrafts(r.it, [r.alloc], { auto: false, manual: true, pooled: true });
+        this._refreshResult(r.it.key, '수기가배정');
+        this.results[r.it.key].reason = (this.results[r.it.key].reason ? this.results[r.it.key].reason + ' / ' : '') + '묶음배정 ' + rows.length + '건';
+      }
+      this._rebuildSetupCount();
+      return { ok: true, rows: rows.map((r) => Object.assign({ planNo: r.it.planNo }, r.alloc)), days };
+    }
+
     /** 호기 다수 점유 품목: 가배정 호기 수가 기준(heavyMachines, 기본 5) 이상이고 담당자가 아직 검토하지 않음. */
     isHeavy(key) {
       const r = this.results[key];
@@ -1573,6 +1743,8 @@
     /** 9_설비배정_확정 형식 행 (가배정 → 확정 붙여넣기용). 초기이관을 쓴 경우 그 행을 앞에 붙인다. */
     confirmRows() {
       const rows = [];
+      for (const c of this.manualRows)
+        rows.push({ planNo: c.planNo, productCode: c.productCode, partCode: c.partCode, machine: Number(c.machine), start: c.start, end: c.end, qty: c.qty, newSetup: 'Y', worker: this.workerByMachine[machineNo(c.machine)] || '', note: c.note, initial: true });
       if (this.initial.used)
         for (const c of this.initial.rows)
           rows.push({ planNo: c.planNo, productCode: c.productCode, partCode: c.partCode, machine: Number(c.machine), start: c.start, end: c.end, qty: c.qty, newSetup: 'Y', worker: this.workerByMachine[c.machine] || '', note: c.note, initial: true });
@@ -1757,6 +1929,7 @@
     opPriority,
     buildItems,
     programAssignments,
+    Calendar,
     Timeline,
     Planner,
   };

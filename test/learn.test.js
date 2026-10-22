@@ -48,6 +48,8 @@ test('수기 간트 읽기: 색칠 구간을 가공기간으로, 첫 날짜는 �
   const p = L.parseGantt(ganttWorkbook(), { today: TODAY });
   assert.equal(E.fmtYMD(p.firstDate), '2026-09-28');
   assert.equal(p.horizon, 15);
+  // 3주 뒤에 열어도 30일짜리 달(9월)의 28일로 추정 (10/28이 더 가깝지만 10월은 31일)
+  assert.equal(E.fmtYMD(L.parseGantt(ganttWorkbook(), { today: E.serialFromYMD(2026, 10, 22) }).firstDate), '2026-09-28');
   const a = p.segs.filter((s) => s.part === 'PLDB101AR-B');
   assert.equal(a.length, 2);
   assert.equal(E.fmtYMD(a[0].startDate), '2026-09-29');
@@ -84,6 +86,8 @@ test('가공기간 보정: 수량대별 계수를 기준 장비일수에 곱한�
   const P1 = new E.Planner(m, { today: TODAY, periodFactors: L.DEFAULT_FACTORS });
   const it = P1.items[0];
   assert.equal(P0.planDays(it, 20000), 5); // 20000/5000 + 여유 1
-  assert.equal(P1.planDays(it, 20000), 7); // ×1.4
+  assert.equal(P1.planDays(it, 20000), 5); // 1만~5만 ×1.0 (근무일 기준 학습값)
+  const P2 = new E.Planner(m, { today: TODAY, periodFactors: { b1: 0.5, b2: 1.4, b3: 1.45, b4: 1.2 } });
+  assert.equal(P2.planDays(it, 20000), 7); // ×1.4
   assert.equal(P1.planDays(it, 1000), 1); // 1만 미만 ×0.5 → 하루
 });
