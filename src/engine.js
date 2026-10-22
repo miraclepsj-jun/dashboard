@@ -789,15 +789,22 @@
       this.cal = new Calendar({ workdays: mode === 'work' || (mode === 'auto' && (model.holidays || []).length > 0), holidays: model.holidays || [] });
       // v732: 신규 배정은 오늘 다음 근무일부터
       this.baseDate = this.cal.nextWork(opts.baseDate != null ? opts.baseDate : this.today + 1);
-      // 수기 일정 이관(담당자 수기 간트 → 정상 판정 행)은 9번 확정과 같은 현행 일정으로 쓴다
-      this.manualRows = (opts.manualConfirmed || []).slice();
+      /*
+       * 초기 이관 = 수기 운영 → 자동/반자동 운영으로 넘어가는 최초 전환 때 한 번만 쓴다.
+       * 9번 확정일정이 하나도 없을 때만 '전환 단계'로 보고, 담당자가 고른 출처로 현행 일정을 만든다:
+       *   - 수기 간트 이관 행(opts.manualConfirmed, 담당자가 정상/지정 확인 후 반영)
+       *   - 또는 일정관리 프로그램 설비1~A + 개시/완료 (opts.useProgramAssignments === true, v670)
+       * 9번에 확정이 생기면(초기 이관 행을 붙여넣은 뒤) 전환이 끝난 것으로 보고 두 출처 모두 쓰지 않는다.
+       */
+      this.transition = !(model.confirmed || []).length;
+      this.manualIgnored = this.transition ? 0 : (opts.manualConfirmed || []).length;
+      this.manualRows = this.transition ? (opts.manualConfirmed || []).slice() : [];
       if (this.manualRows.length) {
-        model = Object.assign({}, model, { confirmed: (model.confirmed || []).concat(this.manualRows) });
+        model = Object.assign({}, model, { confirmed: this.manualRows });
         this.model = model;
       }
-      // v670 초기일정이관: 9번 확정일정이 하나도 없으면 원본의 설비1~A + 개시/완료를 현행 일정으로 쓴다
       this.initial = { used: false, rows: [], skipped: [] };
-      if (!(model.confirmed || []).length && opts.useProgramAssignments !== false) {
+      if (this.transition && !this.manualRows.length && opts.useProgramAssignments === true) {
         const pre = buildItems(model, { baseDate: this.baseDate, materialMap: opts.materialMap });
         const init = programAssignments(pre);
         if (init.rows.length) {
@@ -1740,14 +1747,20 @@
       return s;
     }
 
-    /** 9_설비배정_확정 형식 행 (가배정 → 확정 붙여넣기용). 초기이관을 쓴 경우 그 행을 앞에 붙인다. */
-    confirmRows() {
+    /** 초기 이관 행 (최초 전환 때 한 번만 9번에 붙여넣는다). 전환이 끝났으면 빈 목록. */
+    initialRows() {
       const rows = [];
       for (const c of this.manualRows)
         rows.push({ planNo: c.planNo, productCode: c.productCode, partCode: c.partCode, machine: Number(c.machine), start: c.start, end: c.end, qty: c.qty, newSetup: 'Y', worker: this.workerByMachine[machineNo(c.machine)] || '', note: c.note, initial: true });
       if (this.initial.used)
         for (const c of this.initial.rows)
           rows.push({ planNo: c.planNo, productCode: c.productCode, partCode: c.partCode, machine: Number(c.machine), start: c.start, end: c.end, qty: c.qty, newSetup: 'Y', worker: this.workerByMachine[c.machine] || '', note: c.note, initial: true });
+      return rows.sort((a, b) => a.start - b.start || a.machine - b.machine);
+    }
+
+    /** 9_설비배정_확정 형식 행 (가배정 → 확정 붙여넣기용). 초기 이관 행은 initialRows()로 따로 낸다. */
+    confirmRows() {
+      const rows = [];
       const sorted = this.drafts.slice().sort((a, b) => a.start - b.start || Number(a.machine) - Number(b.machine));
       for (const d of sorted) {
         const worker = this.workerByMachine[d.machine] || '';

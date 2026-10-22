@@ -284,7 +284,10 @@ test('초기일정이관: 9번이 비어 있으면 일정관리 프로그램 설
     { planNo: 'I1', productCode: 'A', partCode: 'PLDB901AR-B', qty: 10001, received: 0, reqDate: TODAY + 20, material: 'SK-4', refMachines: ['3', '4'], progStart: TODAY - 2, progEnd: TODAY + 3 },
     { planNo: 'I2', productCode: 'B', partCode: 'PLDB902AR-B', qty: 5000, received: 0, reqDate: TODAY + 20, material: 'SK-4', refMachines: ['5'] },
   ];
-  const P = new E.Planner(m, { today: TODAY });
+  // 담당자가 프로그램 설비1~A를 초기 이관 출처로 고른 경우에만
+  assert.equal(new E.Planner(m, { today: TODAY }).initial.used, false);
+  const P = new E.Planner(m, { today: TODAY, useProgramAssignments: true });
+  assert.equal(P.transition, true);
   assert.equal(P.initial.used, true);
   assert.equal(P.initial.rows.length, 2);
   assert.deepEqual(P.initial.rows.map((r) => r.qty), [5001, 5000]);
@@ -292,9 +295,14 @@ test('초기일정이관: 9번이 비어 있으면 일정관리 프로그램 설
   assert.equal(P.items[0].status, '배정완료');
   assert.equal(P.timeline.gapStart('3', TODAY + 1, 1), TODAY + 4);
   P.autoPlan();
-  assert.equal(P.confirmRows().filter((r) => r.initial).length, 2);
-  // 9번에 일정이 있으면 초기이관을 쓰지 않는다
-  assert.equal(new E.Planner(Demo.build(TODAY), { today: TODAY }).initial.used, false);
+  assert.equal(P.initialRows().length, 2);
+  assert.equal(P.confirmRows().filter((r) => r.initial).length, 0, '초기 이관 행은 가배정 결과와 따로');
+  // 9번에 일정이 있으면 전환이 끝난 것: 초기 이관을 쓰지 않는다
+  const done = new E.Planner(Demo.build(TODAY), { today: TODAY, useProgramAssignments: true, manualConfirmed: P.initial.rows });
+  assert.equal(done.transition, false);
+  assert.equal(done.initial.used, false);
+  assert.equal(done.manualIgnored, 2);
+  assert.equal(done.initialRows().length, 0);
 });
 
 test('호기 다수 점유 품목: 호기 수를 줄여 기간을 늘리고, 검토 완료 표시', () => {

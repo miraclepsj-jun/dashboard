@@ -48,6 +48,8 @@
     // 근무일 기준 학습값 (가공1팀 수기 간트, 토·일·23번 휴일 제외)
     periodFactors: { b1: 0.5, b2: 1, b3: 1, b4: 0.8 },
     calendarMode: 'work',
+    // 초기 이관 출처 (9번이 비어 있는 최초 전환 단계에서만 사용): manual=수기 간트, program=프로그램 설비1~A, none
+    initialSource: 'manual',
   };
   const savedSettings = store.get('cnc.settings', {});
   const S = {
@@ -87,7 +89,8 @@
       requireActualOk: S.settings.requireActualOk,
       materialMap: E.parseMaterialMap(S.settings.matMap),
       periodFactors: S.settings.periodOn ? S.settings.periodFactors : null,
-      manualConfirmed: S.manualRows || [],
+      manualConfirmed: S.settings.initialSource === 'manual' ? S.manualRows || [] : [],
+      useProgramAssignments: S.settings.initialSource === 'program',
       calendarMode: S.settings.calendarMode,
       roomRules: S.settings.roomRules,
       roomWaitDays: S.settings.roomWaitDays,
@@ -180,7 +183,7 @@
     const m = S.model;
     const txt = S.isDemo
       ? '예시 데이터(가상)로 열려 있습니다 · [엑셀 불러오기]로 회사 통합문서(.xlsm)를 여세요'
-      : S.source + ' · 원본 ' + nf(m.raw.length) + '행 · 설비 ' + nf(m.machines.length) + '대 · ' + ((S.manualRows || []).length ? '수기 일정 이관 ' + nf(S.manualRows.length) + '행 + 9번 확정 ' + nf(m.confirmed.length) + '건' : S.planner.initial.used ? '9번 비어 있음 → 프로그램 기존배정 ' + nf(S.planner.initial.rows.length) + '행을 현행 일정으로 사용' : '확정일정 ' + nf(m.confirmed.length) + '건') + (S.planner.cal.workdays ? ' · 근무일 기준(휴일 ' + nf((m.holidays || []).length) + '일)' : ' · 달력일 기준') + ' · 기준게시일 ' + E.fmtYMD(S.baseDate);
+      : S.source + ' · 원본 ' + nf(m.raw.length) + '행 · 설비 ' + nf(m.machines.length) + '대 · ' + (!S.planner.transition ? '확정일정 ' + nf(m.confirmed.length) + '건' : S.planner.manualRows.length ? '최초 전환: 수기 간트 초기 이관 ' + nf(S.planner.manualRows.length) + '행' : S.planner.initial.used ? '최초 전환: 프로그램 설비1~A 초기 이관 ' + nf(S.planner.initial.rows.length) + '행' : '9번 비어 있음 · 최초 전환 전 (수기 일정·학습 탭에서 초기 이관)') + (S.planner.cal.workdays ? ' · 근무일 기준(휴일 ' + nf((m.holidays || []).length) + '일)' : ' · 달력일 기준') + ' · 기준게시일 ' + E.fmtYMD(S.baseDate);
     $('sourceLine').textContent = txt;
   }
 
@@ -604,12 +607,13 @@
         rep.file = file.name;
         S.manualParsed = parsed;
         S.manualFile = file.name;
-        buildManualPreview();
+        if (S.planner.transition) buildManualPreview();
+        else S.manualPreview = null;
         S.learn = rep;
         store.set('cnc.learn', rep);
         $('learnFirst').value = E.fmtYMD(parsed.firstDate);
         renderAll();
-        toast('수기 간트 ' + nf(rep.jobs) + '건을 읽었습니다 · 이관 정상 ' + nf(S.manualPreview.counts['정상']) + ' / 확인필요 ' + nf(S.manualPreview.counts['확인필요']));
+        toast('수기 간트 ' + nf(rep.jobs) + '건을 읽었습니다' + (S.manualPreview ? ' · 초기 이관 정상 ' + nf(S.manualPreview.counts['정상']) + ' / 확인필요 ' + nf(S.manualPreview.counts['확인필요']) : ' · 전환 완료 상태라 학습 분석만 했습니다'));
       });
     reader.readAsArrayBuffer(file);
   }
@@ -626,13 +630,37 @@
     S.manualPreview.planner = P0;
   }
   function renderManual() {
+    const P = S.planner;
     const pv = S.manualPreview;
-    const applied = (S.manualRows || []).length;
-    if (!pv) {
+    const applied = P.manualRows.length;
+    if (!P.transition) {
       $('manualBody').innerHTML =
-        '<div class="mcard wide"><h3>수기 일정 이관</h3><p class="hint">[수기 간트 불러오기]로 담당자가 쓰던 방별 수기 간트를 열면, 오늘 이후 작업블록을 원본 발주와 맞춰 현행 일정으로 옮깁니다 (v700~v738 수기 일정 읽기와 같은 규칙). 확인이 필요한 블록은 여기서 발주와 수량을 직접 지정합니다.</p>' +
+        '<div class="mcard wide"><h3>초기 이관 – 최초 전환 완료</h3><p class="hint">9_설비배정_확정에 확정일정 ' + nf(P.model.confirmed.length) + '건이 있어 자동/반자동 운영 중입니다. 초기 이관은 수기 운영에서 넘어오는 최초 전환 때 한 번만 쓰므로 여기서는 하지 않습니다. 수기 간트를 불러오면 아래 현장 학습 분석만 합니다.</p></div>';
+      return;
+    }
+    const src = S.settings.initialSource;
+    const srcSel =
+      '<div class="row"><label for="initSrc">초기 이관 출처</label><select id="initSrc"><option value="manual"' + (src === 'manual' ? ' selected' : '') + '>담당자 수기 간트 (권장)</option><option value="program"' + (src === 'program' ? ' selected' : '') + '>일정관리 프로그램 설비1~A + 개시/완료</option><option value="none"' + (src === 'none' ? ' selected' : '') + '>사용 안 함 (빈 상태에서 시작)</option></select>' +
+      (src === 'program' ? '<span class="hint">프로그램 기존배정 ' + nf(P.initial.rows.length) + '행 사용 · 날짜·수량 없어 제외 ' + nf(P.initial.skipped.length) + '건</span>' : '') +
+      '</div>';
+    const guide =
+      '<p class="hint"><b>최초 전환 단계</b> (9번 시트가 비어 있음). 수기 운영에서 자동/반자동으로 넘어가는 첫날 한 번만: ① 출처 선택 → ② 수기 간트 불러오기 → ③ 확인필요 직접 지정 → ④ [현행 일정으로 반영] → ⑤ [결과 엑셀 내보내기]의 <b>초기 이관 행</b>을 9번 A2에 붙여넣기. 그 뒤로는 9번 확정이 현행 일정이 되고 이 기능은 잠깁니다.</p>';
+    const bindSrc = () => {
+      const el = $('initSrc');
+      if (el)
+        el.onchange = () => {
+          S.settings.initialSource = el.value;
+          store.set('cnc.settings', S.settings);
+          replan('초기 이관 출처를 바꿨습니다');
+        };
+    };
+    if (src !== 'manual' || !pv) {
+      $('manualBody').innerHTML =
+        '<div class="mcard wide"><h3>초기 이관 (최초 전환 1회)</h3>' + guide + srcSel +
+        (src === 'manual' ? '<p class="hint">[수기 간트 불러오기]로 담당자가 쓰던 방별 수기 간트를 열면 오늘 이후 작업블록을 원본 발주와 맞춰 미리 보여줍니다 (v700~v738 수기 일정 읽기와 같은 규칙).</p>' : '') +
         (applied ? '<p class="hint"><b>현재 반영된 수기 이관 ' + nf(applied) + '행</b> · <button class="btn small danger" type="button" id="manualClear">반영 취소</button></p>' : '') +
         '</div>';
+      bindSrc();
       const c = $('manualClear');
       if (c) c.onclick = clearManual;
       return;
@@ -663,7 +691,7 @@
       })
       .join('');
     $('manualBody').innerHTML =
-      '<div class="mcard wide"><h3>수기 일정 이관 · ' + esc(S.manualFile || '') + '</h3>' +
+      '<div class="mcard wide"><h3>초기 이관 (최초 전환 1회) · ' + esc(S.manualFile || '') + '</h3>' + guide + srcSel +
       '<p class="hint">작업묶음 ' + nf(pv.waves.length) + '개 (같은 부품·같은 수기 수량 표기·이어지는 기간). 매칭 근거: 원본 설비1~A·개시/완료 → 미납 발주 1건 → 수량 일치. 수량은 발주 미납잔량 − 9번 미완료 확정잔량을 블록 근무일 비례로 나눕니다. 지난일정(수기 완료일이 오늘 이전)은 옮기지 않습니다.</p>' +
       '<div class="row">' + chips + '</div>' +
       '<div class="row"><button class="btn primary" type="button" id="manualApply">정상 묶음을 현행 일정으로 반영 (' + nf(rowsN) + '행)</button>' + (applied ? '<span class="hint">현재 반영 ' + nf(applied) + '행</span><button class="btn small danger" type="button" id="manualClear">반영 취소</button>' : '') + '</div>' +
@@ -672,6 +700,7 @@
       '</tbody></table></div>' +
       (list.length > 200 ? '<p class="hint">상위 200개만 표시</p>' : '') +
       '</div>';
+    bindSrc();
     for (const b of document.querySelectorAll('[data-mfilter]'))
       b.onclick = () => {
         S.manualFilter = b.dataset.mfilter;
@@ -699,7 +728,7 @@
         rebuild('manual');
         buildManualPreview();
         renderAll();
-        toast('수기 일정 ' + nf(S.manualRows.length) + '행을 현행 일정으로 반영했습니다. 9번 붙여넣기 결과에 함께 나갑니다');
+        toast('초기 이관 ' + nf(S.manualRows.length) + '행을 현행 일정으로 반영했습니다. [결과 엑셀 내보내기]의 초기 이관 행을 9번에 한 번 붙여넣으세요');
       });
     const c = $('manualClear');
     if (c) c.onclick = clearManual;
@@ -783,8 +812,7 @@
           ['작업자운영', m.workers.length],
           ['BD규격마스터', m.bdSpecs.length],
           ['9번 확정일정', m.confirmed.length],
-          ['프로그램 기존배정 초기이관', S.planner.initial.used ? S.planner.initial.rows.length : 0],
-          ['초기이관 제외(날짜·수량 확인)', S.planner.initial.skipped.length],
+          ['초기 이관(최초 전환) 행', S.planner.initialRows().length],
         ]
           .map(([k, v]) => '<li>' + esc(k) + ' <b>' + nf(v) + '</b></li>')
           .join('') +
@@ -1098,6 +1126,12 @@
     S.manualParsed = null;
     $('drawer').hidden = true;
     const restored = rebuild('all');
+    if (S.planner.manualIgnored) {
+      // 9번에 확정이 생겼다 = 초기 이관 행을 붙여넣어 전환을 마쳤다 → 저장해 둔 이관 행은 다시 쓰지 않는다
+      S.manualRows = [];
+      store.set(manualStoreKey(), []);
+      setTimeout(() => toast('9번에 확정일정이 있어 최초 전환이 끝난 것으로 봅니다. 이전에 반영한 초기 이관 행은 쓰지 않습니다'), 50);
+    }
     S.page = 0;
     renderAll();
     return restored;
@@ -1148,6 +1182,9 @@
   function tsv(rows) {
     return rows.map((r) => r.map((v) => (v == null ? '' : String(v).replace(/[\t\n]/g, ' '))).join('\t')).join('\n');
   }
+  function initialTsv() {
+    return tsv(S.planner.initialRows().map((r) => [r.planNo, r.productCode, r.partCode, r.machine, E.fmtYMD(r.start), E.fmtYMD(r.end), r.qty, r.newSetup, r.worker, '', '', r.note]));
+  }
   function confirmTsv() {
     return tsv(S.planner.confirmRows().map((r) => [r.planNo, r.productCode, r.partCode, r.machine, E.fmtYMD(r.start), E.fmtYMD(r.end), r.qty, r.newSetup, r.worker, '', '', r.note]));
   }
@@ -1156,7 +1193,7 @@
   }
 
   function exportExcel() {
-    if (!S.planner.drafts.length) return toast('가배정이 없습니다. [자동 일정수립]을 먼저 실행하세요');
+    if (!S.planner.drafts.length && !S.planner.initialRows().length) return toast('가배정이 없습니다. [자동 일정수립]을 먼저 실행하세요');
     const wb = W.buildExportWorkbook(S.planner, {});
     try {
       window.XLSX.writeFile(wb, W.exportFileName());
@@ -1175,6 +1212,7 @@
         '<form method="dialog"><h2>결과 내보내기</h2>' +
         '<p class="hint">가배정은 아직 통합문서에 반영되지 않았습니다. 검토 후 아래 방법 중 하나로 옮기세요.</p>' +
         '<div class="box"><h3>1. 결과 엑셀 파일</h3><p class="hint">9번확정_붙여넣기 · 프로그램입력요약(설비1~A) · 품목별결과 · 간트 시트를 담은 새 파일을 저장합니다. 원본 통합문서는 바꾸지 않습니다.</p><div class="row"><button class="btn primary" type="button" id="exFile">엑셀 파일 저장</button></div></div>' +
+        '<div class="box" id="exInitBox"><h3>초기 이관 – 최초 전환 때 한 번만</h3><p class="hint">수기 운영에서 넘어오는 첫날에만 씁니다. 9번 시트(비어 있음) A2에 먼저 붙여넣고, 그 아래에 가배정을 붙여넣으세요. 한 번 붙여넣은 뒤에는 다시 나오지 않습니다.</p><div class="row"><button class="btn" type="button" id="exInitial">초기 이관 행 복사</button><span class="hint" id="exInitialN"></span></div></div>' +
         '<div class="box"><h3>2. 9_설비배정_확정에 바로 붙여넣기</h3><p class="hint">9번 시트의 마지막 행 아래 A열을 선택하고 붙여넣으세요 (계획번호~비고 12열). 그 뒤 기존 매크로로 간트/가용일을 갱신하면 됩니다.</p><div class="row"><button class="btn" type="button" id="exConfirm">9번 붙여넣기용 복사</button><span class="hint" id="exConfirmN"></span></div></div>' +
         '<div class="box"><h3>3. 일정관리 프로그램 설비1~설비A</h3><p class="hint">계획번호 · 제품코드 · 게시일 · 완료일 · 설비1~설비A · 비고 순서입니다.</p><div class="row"><button class="btn" type="button" id="exProgram">설비1~A 요약 복사</button></div></div>' +
         '<div class="dialog-actions"><button class="btn" value="cancel" type="submit">닫기</button></div></form>';
@@ -1182,8 +1220,11 @@
       $('exFile').onclick = exportExcel;
       $('exConfirm').onclick = () => copyText(confirmTsv(), '9번 붙여넣기용 ' + nf(S.planner.drafts.length) + '행을 복사했습니다');
       $('exProgram').onclick = () => copyText(programTsv(), '설비1~A 요약을 복사했습니다');
+      $('exInitial').onclick = () => copyText(initialTsv(), '초기 이관 ' + nf(S.planner.initialRows().length) + '행을 복사했습니다');
     }
     $('exConfirmN').textContent = nf(S.planner.drafts.length) + '행';
+    $('exInitBox').hidden = !S.planner.initialRows().length;
+    $('exInitialN').textContent = nf(S.planner.initialRows().length) + '행';
     dlg.showModal();
   }
 

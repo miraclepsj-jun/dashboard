@@ -425,7 +425,15 @@
     opts = opts || {};
     const wb = XLSX.utils.book_new();
 
-    // 1) 9번 확정시트 붙여넣기용
+    // 0) 초기 이관 (수기 → 자동 최초 전환 때 한 번만 9번에 붙여넣기)
+    const init = planner.initialRows ? planner.initialRows() : [];
+    if (init.length) {
+      const ia = [CONFIRM_HEADERS.slice()];
+      for (const r of init) ia.push([r.planNo, r.productCode, r.partCode, r.machine, dateCell(r.start), dateCell(r.end), r.qty, r.newSetup, r.worker, null, null, r.note, null, null, null, null, null]);
+      XLSX.utils.book_append_sheet(wb, aoaSheet(ia, [12, 20, 20, 8, 11, 11, 9, 8, 10, 8, 8, 44, 8, 10, 8, 8, 10]), '9번_초기이관(최초1회)');
+    }
+
+    // 1) 9번 확정시트 붙여넣기용 (가배정)
     const conf = [CONFIRM_HEADERS.slice()];
     for (const r of planner.confirmRows()) {
       conf.push([r.planNo, r.productCode, r.partCode, r.machine, dateCell(r.start), dateCell(r.end), r.qty, r.newSetup, r.worker, null, null, r.note, null, null, null, null, null]);

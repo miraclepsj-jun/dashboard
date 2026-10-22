@@ -72,8 +72,15 @@ test('수기 일정 이관: 작업묶음 매칭·수량배분·판정', () => {
   assert.equal(Q.itemByKey[E.itemKey('A1', 'PA', 'PLDB501AR-B')].status, '배정완료');
   assert.equal(Q.timeline.gapStart('1', TODAY + 1, 1), Q.cal.nextWork(TODAY + 8));
   Q.autoPlan();
-  assert.equal(Q.confirmRows().filter((r) => r.initial).length, rows.length);
+  assert.equal(Q.initialRows().length, rows.length);
+  assert.equal(Q.confirmRows().filter((r) => r.initial).length, 0);
   // 반영 후 다시 미리보기 → 9번중복(현행 일정에 이미 있음)
   const again = M.preview(parsed, Q);
   assert.equal(again.waves.find((w) => w.part === 'PLDB501AR-B' && w.status !== '지난일정').status, '9번중복');
+  // 초기 이관 행을 9번에 붙여넣은 뒤(전환 완료) 다시 불러오면 저장된 이관 행은 겹쳐 쓰지 않는다
+  const m2 = Object.assign({}, m, { confirmed: rows.map((r) => Object.assign({}, r, { source: undefined })) });
+  const R = new E.Planner(m2, { today: TODAY, manualConfirmed: rows });
+  assert.equal(R.transition, false);
+  assert.equal(R.manualIgnored, rows.length);
+  assert.equal(R.itemByKey[E.itemKey('A1', 'PA', 'PLDB501AR-B')].confirmedQty, 30000, '확정수량이 두 배가 되면 안 됨');
 });
