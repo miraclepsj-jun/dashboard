@@ -84,3 +84,72 @@ test('수기 일정 이관: 작업묶음 매칭·수량배분·판정', () => {
   assert.equal(R.manualIgnored, rows.length);
   assert.equal(R.itemByKey[E.itemKey('A1', 'PA', 'PLDB501AR-B')].confirmedQty, 30000, '확정수량이 두 배가 되면 안 됨');
 });
+
+test('수기 일정 이관: 수량 표기 유무 혼재·발주별 남은 수량·원본 기간·미등록 호기', () => {
+  const m = model();
+  m.raw = [
+    { planNo: 'G1', productCode: 'PG', partCode: 'PLDB506AR-B', qty: 20000, received: 0, orderDate: TODAY - 10, material: 'SK-4', refMachines: [] },
+    { planNo: 'H1', productCode: 'PH', partCode: 'PLDB507AR-B', qty: 100000, received: 0, orderDate: TODAY - 10, material: 'SK-4', refMachines: [] },
+    { planNo: 'J1', productCode: 'PJ', partCode: 'PLDB508AR-B', qty: 5000, received: 0, orderDate: TODAY - 10, material: 'SK-4', refMachines: ['9'], progStart: TODAY + 60, progEnd: TODAY + 90 },
+    { planNo: 'J2', productCode: 'PJ', partCode: 'PLDB508AR-B', qty: 6000, received: 0, orderDate: TODAY - 5, material: 'SK-4', refMachines: [] },
+    { planNo: 'K1', productCode: 'PK', partCode: 'PLDB509AR-B', qty: 4000, received: 0, orderDate: TODAY - 10, material: 'SK-4', refMachines: [] },
+    { planNo: 'L1', productCode: 'PL', partCode: 'PLDB510AR-B', qty: 8000, received: 0, orderDate: TODAY - 10, material: 'SK-4', refMachines: [] },
+    { planNo: 'L2', productCode: 'PL', partCode: 'PLDB510AR-B', qty: 8000, received: 0, orderDate: TODAY - 5, material: 'SK-4', refMachines: [] },
+  ];
+  const P = new E.Planner(m, { today: TODAY, useProgramAssignments: false });
+  const parsed = {
+    firstDate: TODAY - 3,
+    segs: [
+      // 한 발주(20K)를 수기 블록 셋이 나눠 씀: 15K → 남은 5K만 → 잔량없음
+      seg(4, 'PLDB506AR-B', 1, 3, { qty: 15000 }),
+      seg(5, 'PLDB506AR-B', 6, 8, { qty: 12000 }),
+      seg(6, 'PLDB506AR-B', 12, 13, { qty: 3000 }),
+      // 수량 표기 없음 → 근무일 × 일생산량 추정 (발주 전량 100K가 아니라)
+      seg(8, 'PLDB507AR-B', 1, 2),
+      // 설비1~A에 9호기가 있어도 원본 개시~완료가 두 달 뒤면 근거가 아님 → 수량 일치로 J2
+      seg(9, 'PLDB508AR-B', 1, 3, { qty: 6000 }),
+      // 설비마스터에 없는 호기도 이관한다
+      seg(9999, 'PLDB509AR-B', 1, 3, { qty: 4000 }),
+      // 수량 표기 없는 두 블록, 미납 발주 2건 → 확인필요(발주일순 추천)
+      seg(10, 'PLDB510AR-B', 1, 2),
+      seg(103, 'PLDB510AR-B', 20, 21),
+    ],
+  };
+  const pv = M.preview(parsed, P);
+  const by = (part) => pv.waves.filter((w) => w.part === part);
+  const sum = (w) => w.rows.reduce((a, r) => a + r.qty, 0);
+  const g = by('PLDB506AR-B');
+  assert.deepEqual(g.map((w) => w.status), ['정상', '정상', '잔량없음']);
+  assert.deepEqual(g.slice(0, 2).map(sum), [15000, 5000]);
+  assert.match(g[1].reason, /남은 만큼/);
+  assert.match(g[2].reason, /앞 수기 블록/);
+  const h = by('PLDB507AR-B')[0];
+  assert.equal(h.status, '정상');
+  assert.equal(h.estimated, true);
+  assert.equal(sum(h), P.cal.count(TODAY + 1, TODAY + 2) * 5000);
+  assert.equal(pv.estimated, 1);
+  const j = by('PLDB508AR-B')[0];
+  assert.deepEqual(j.plans, ['J2']);
+  assert.equal(j.how, '수량 일치');
+  const k = by('PLDB509AR-B')[0];
+  assert.equal(k.status, '정상');
+  assert.match(k.reason, /설비마스터 미등록 호기 9999/);
+  const [l1, l2] = by('PLDB510AR-B');
+  assert.equal(l1.status, '확인필요');
+  assert.deepEqual(l1.suggest, ['L1', 'L2']);
+  assert.equal(l1.suggestQty, P.cal.count(TODAY + 1, TODAY + 2) * 5000);
+  // 담당자 지정은 다른 묶음이 이미 쓴 수량을 뺀다
+  assert.equal(M.resolve(l1, ['L1'], 0, P, pv), true);
+  assert.equal(sum(l1), 8000);
+  assert.equal(M.resolve(l2, ['L1'], 0, P, pv), false);
+  assert.equal(M.resolve(l2, ['L2'], 0, P, pv), true);
+  assert.equal(pv.counts['확인필요'], 0);
+  // 발주별 이관 합계는 미납잔량을 넘지 않는다
+  const rows = M.toConfirmed(pv);
+  const tot = {};
+  for (const r of rows) tot[r.planNo] = (tot[r.planNo] || 0) + r.qty;
+  for (const r of m.raw) assert.ok(!(tot[r.planNo] > r.qty), r.planNo + ' 과배정');
+  // 미등록 호기 일정은 현행 일정에 남고 점검 목록에 나온다
+  const Q = new E.Planner(m, { today: TODAY, manualConfirmed: rows });
+  assert.deepEqual(Q.unknownMachines().map((u) => [u.no, u.rows]), [['9999', 1]]);
+});

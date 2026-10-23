@@ -382,15 +382,15 @@
     }
     const classCache = {};
     const items = [];
-    (model.raw || []).forEach((r, idx) => {
-      if (!str(r.planNo) && !str(r.productCode) && !str(r.partCode)) return;
+    mergeDetailRows(model.raw || []).forEach((r) => {
+      const idx = r.idx;
       const partCode = str(r.partCode);
       const ck = up(partCode);
       const cls = classCache[ck] || (classCache[ck] = classifyPart(partCode, rules));
       const qty = toNum(r.qty);
       const received = toNum(r.received);
       // v670 배정대상수량: 발주량 - 입고누계, 발주량이 없으면 필요수량
-      const openQty = qty > 0 ? Math.max(0, qty - received) : Math.max(0, toNum(r.need));
+      const openQty = r.detailRows > 1 ? r._open : qty > 0 ? Math.max(0, qty - received) : Math.max(0, toNum(r.need));
       const pd = prodDict[up(cls.prod).replace(/\s/g, '')];
       let daily = pd ? pd.daily : 0;
       let machineDays = 0;
@@ -444,17 +444,53 @@
         progStart: r.progStart != null ? r.progStart : null,
         progEnd: r.progEnd != null ? r.progEnd : null,
         remainQty: Math.max(0, openQty - cq),
+        detailRows: r.detailRows,
+        eqBad: r.eqBad || [],
         status,
       });
     });
-    // 동일 계획/제품/부품이 여러 행이면 확정수량이 중복 차감되지 않도록 첫 행만 기존확정을 인정한다.
-    const seen = {};
-    for (const it of items) {
-      if (seen[it.key]) {
-        it.dupOf = seen[it.key].id;
-      } else seen[it.key] = it;
-    }
     return items;
+  }
+
+  /**
+   * 같은 계획번호/제품코드/부품코드가 여러 행(분할 납품·세부행)이면 한 품목으로 합친다 (v730).
+   * 발주량·입고량·필요수량은 합, 발주일·요구일은 가장 이른 날, 설비1~A는 합집합, 개시는 가장 이른 날·완료는 가장 늦은 날.
+   * 미납잔량은 행마다 따로 계산해 더하므로(_open) 일부 세부행만 입고된 경우도 맞게 남는다.
+   */
+  function mergeDetailRows(raw) {
+    const out = [];
+    const byKey = {};
+    raw.forEach((r, idx) => {
+      if (!str(r.planNo) && !str(r.productCode) && !str(r.partCode)) return;
+      const key = itemKey(r.planNo, r.productCode, r.partCode);
+      const qty = toNum(r.qty);
+      const received = toNum(r.received);
+      const open = qty > 0 ? Math.max(0, qty - received) : Math.max(0, toNum(r.need));
+      const g = byKey[key];
+      if (!g) {
+        const m = Object.assign({}, r, { idx, detailRows: 1, refMachines: (r.refMachines || []).slice(), _open: open, _need: toNum(r.need) });
+        byKey[key] = m;
+        out.push(m);
+        return;
+      }
+      const minOf = (a, b) => (a == null ? b : b == null ? a : Math.min(a, b));
+      const maxOf = (a, b) => (a == null ? b : b == null ? a : Math.max(a, b));
+      g.detailRows++;
+      g.qty = toNum(g.qty) + qty;
+      g.received = toNum(g.received) + received;
+      g._need += toNum(r.need);
+      g._open += open;
+      g.reqDate = minOf(g.reqDate, r.reqDate);
+      g.orderDate = minOf(g.orderDate, r.orderDate);
+      g.progStart = minOf(g.progStart, r.progStart);
+      g.progEnd = maxOf(g.progEnd, r.progEnd);
+      for (const m of r.refMachines || []) if (!g.refMachines.includes(m)) g.refMachines.push(m);
+      if (r.eqBad) g.eqBad = (g.eqBad || []).concat(r.eqBad);
+      for (const f of ['material', 'workArea', 'special'])
+        if (!str(g[f]) && str(r[f])) g[f] = r[f];
+    });
+    for (const g of out) if (g.detailRows > 1) g.need = g._need;
+    return out;
   }
 
   function parseBuffer(v) {
@@ -1491,6 +1527,18 @@
       if (ded === 'BG') return !(item.main === 'BG' || mat.startsWith('BG'));
       return false;
     }
+    /**
+     * 확정·이관 일정이나 원본 설비1~A에는 있는데 4_설비마스터에 없는 호기. 반환 [{no, rows, refs}]
+     * (자동배정 후보에서는 빠지지만 기존 일정은 그대로 두고 간트에 '미등록' 행으로 보여준다)
+     */
+    unknownMachines() {
+      const map = new Map();
+      const get = (no) => map.get(no) || map.set(no, { no, rows: 0, refs: 0 }).get(no);
+      for (const [no, list] of this.timeline.byMachine) if (!this.machineByNo[no] && list.length) get(no).rows += list.filter((x) => x.kind === 'confirmed').length;
+      for (const it of this.items) for (const no of it.refMachines) if (!this.machineByNo[no]) get(no).refs++;
+      return [...map.values()].filter((x) => x.rows || x.refs).sort((a, b) => Number(a.no) - Number(b.no));
+    }
+
     /** 담당자가 직접 입력한 호기 검사: 설비마스터 미등록, 재질호기제외, 대분류 가공불가, 완료확인 필요. 반환 [오류문구] */
     checkMachines(item, machines) {
       const errs = [];

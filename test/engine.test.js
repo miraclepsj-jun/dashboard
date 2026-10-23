@@ -403,3 +403,23 @@ test('묶음배정: 같은 부품·재질 발주를 호기 1대에 발주일순�
   const P2 = new E.Planner(m, { today: TODAY });
   assert.equal(P2.poolAssign(P2.poolCandidates(P2.items[0]), '4', 1).ok, false); // 하루로는 1만 개 불가
 });
+
+test('원본 세부행: 같은 계획/제품/부품 여러 행은 한 품목으로 합산', () => {
+  const m = Demo.build(TODAY);
+  m.confirmed = [];
+  m.raw = [
+    { planNo: 'S1', productCode: 'PS', partCode: 'PLDB601AR-B', qty: 20900, received: 0, reqDate: TODAY + 30, orderDate: TODAY - 5, material: 'SK-4', refMachines: ['3'] },
+    { planNo: 'S1', productCode: 'PS', partCode: 'PLDB601AR-B', qty: 3300, received: 3300, reqDate: TODAY + 20, orderDate: TODAY - 9, material: 'SK-4', refMachines: ['4'] },
+    { planNo: 'S1', productCode: 'PS', partCode: 'PLDB601AR-B', qty: 135800, received: 800, reqDate: TODAY + 40, material: 'SK-4', refMachines: ['3'] },
+  ];
+  const items = E.buildItems(m, { baseDate: TODAY + 1 });
+  assert.equal(items.length, 1);
+  const it = items[0];
+  assert.equal(it.detailRows, 3);
+  assert.equal(it.qty, 160000);
+  assert.equal(it.openQty, 20900 + 135000);
+  assert.equal(it.due, TODAY + 20);
+  assert.equal(it.orderDate, TODAY - 9);
+  assert.deepEqual(it.refMachines, ['3', '4']);
+  assert.equal(it.dupOf, undefined);
+});

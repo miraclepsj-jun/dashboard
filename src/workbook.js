@@ -139,10 +139,30 @@
         schedule: str(at(row, cols.schedule)),
         material: str(at(row, cols.material)),
         special: str(at(row, cols.special)),
-        refMachines: cols.eq.map((c) => at(row, c)).filter((v) => v != null && str(v) !== '').map((v) => E.machineNo(v)),
+        ...eqCells(cols.eq.map((c) => at(row, c))),
       });
     }
     return out;
+  }
+
+  /**
+   * 설비1~A 칸 → 호기 목록. 날짜가 잘못 들어가 일련번호(46155 등)가 된 칸이나 날짜 객체는 호기가 아니므로
+   * eqBad로 따로 남겨 [기준 점검]에서 알린다.
+   */
+  function eqCells(vals) {
+    const refMachines = [];
+    const eqBad = [];
+    for (const v of vals) {
+      if (v == null || str(v) === '') continue;
+      if (v instanceof Date) {
+        eqBad.push(str(v));
+        continue;
+      }
+      const no = E.machineNo(v);
+      if (!/^\d+$/.test(no) || Number(no) <= 0 || Number(no) > 9999) eqBad.push(str(v));
+      else if (!refMachines.includes(no)) refMachines.push(no);
+    }
+    return eqBad.length ? { refMachines, eqBad } : { refMachines };
   }
 
   /** 클립보드 붙여넣기 텍스트(TSV) → 원본 행. */
@@ -486,7 +506,8 @@
     const head = ['호기', '방'];
     for (let d = 0; d < days; d++) head.push(dateCell(from + d));
     const g = [head];
-    for (const m of planner.machines) {
+    const unknown = planner.unknownMachines ? planner.unknownMachines().filter((u) => u.rows).map((u) => ({ no: u.no, room: '설비마스터 미등록' })) : [];
+    for (const m of planner.machines.concat(unknown)) {
       const segs = planner.timeline.segments(m.no);
       if (!segs.some((s) => s.e >= from && s.s < from + days)) continue;
       const row = [Number(m.no), m.room];

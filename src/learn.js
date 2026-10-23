@@ -89,6 +89,20 @@
    * 수기 간트 통합문서 → 작업 구간 목록.
    * opts.firstDate: 첫 날짜 칸의 실제 날짜(엑셀 일련번호). 없으면 today 기준 추정.
    */
+  /**
+   * A열 호기 칸 → {no, tag}. 담당자가 편의상 "430,,", "402(A)", "606(작은거X)", "121호기"처럼 적은 칸도
+   * 앞의 숫자를 호기로 읽는다 ("신규호기" 같은 머리행·빈칸은 제외).
+   */
+  function machineCell(a) {
+    if (!a || a.v == null) return null;
+    if (typeof a.v === 'number') return a.v > 0 && a.v < 10000 ? { no: String(Math.trunc(a.v)), tag: '' } : null;
+    const t = str(a.v);
+    const m = /^(\d{1,4})(?!\d)\s*(.*)$/.exec(t);
+    if (!m || Number(m[1]) <= 0) return null;
+    const tag = m[2].replace(/^[,.\s]+|[,.\s]+$/g, '').replace(/^호기/, '').trim();
+    return { no: String(Number(m[1])), tag };
+  }
+
   function parseGantt(data, opts) {
     opts = opts || {};
     const XLSX = getXLSX();
@@ -123,10 +137,10 @@
       const headNames = [];
       for (let c = 1; c < cols[0]; c++) headNames.push(str(cell(0, c) && cell(0, c).v));
       for (let r = 1; r <= range.e.r; r++) {
-        const a = cell(r, 0);
-        if (!a || typeof a.v !== 'number' || a.v <= 0) continue;
-        const m = String(Math.trunc(a.v));
-        const info = {};
+        const mc = machineCell(cell(r, 0));
+        if (!mc) continue;
+        const m = mc.no;
+        const info = mc.tag ? { 호기표기: mc.tag } : {};
         headNames.forEach((h, i) => {
           const x = cell(r, i + 1);
           if (h && x && x.v != null && str(x.v) !== '') info[h] = str(x.v);
@@ -345,5 +359,5 @@
     return { bands, multi, oneRoom };
   }
 
-  return { BANDS, DEFAULT_FACTORS, bandOf, parseLabel, parseGantt, analyze, summarizePlan };
+  return { BANDS, DEFAULT_FACTORS, bandOf, machineCell, parseLabel, parseGantt, analyze, summarizePlan };
 });

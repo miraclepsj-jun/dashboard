@@ -72,3 +72,10 @@ test('결과 통합문서: 시트 4개, 9번 붙여넣기 17열', () => {
   assert.equal(rows[0].length, 17);
   assert.equal(rows.length - 1, P.drafts.length);
 });
+
+test('설비1~A: 날짜 일련번호 등 호기가 아닌 값은 빼고 따로 알림', () => {
+  const text = ['승인\t계획번호\t제품코드\t부품코드\t발주량\t요청일\t재질\t설비1\t설비2\t설비3', '\t260825-035\tGX\tTEGX1957AM-TGPC\t1000\t2026-10-05\tSK-4\t46155\t121\t121호기'].join('\n');
+  const [r] = W.parsePastedText(text);
+  assert.deepEqual(r.refMachines, ['121']);
+  assert.deepEqual(r.eqBad, ['46155']);
+});

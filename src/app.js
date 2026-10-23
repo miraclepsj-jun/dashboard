@@ -321,6 +321,7 @@
     const P = S.planner;
     ganttMetrics();
     const rooms = [...new Set(P.machines.map((m) => m.room))];
+    if (P.unknownMachines().some((u) => u.rows)) rooms.push('설비마스터 미등록');
     const rs = $('ganttRoom');
     if (rs.dataset.sig !== rooms.join('|')) {
       const cur = rs.value;
@@ -335,7 +336,11 @@
     const room = rs.value;
     const q = $('ganttSearch').value.trim().toUpperCase();
     const busyOnly = $('ganttBusy').checked;
-    G.rows = P.machines.filter((m) => {
+    // 설비마스터에 없는데 확정·이관 일정이 있는 호기는 맨 아래 '미등록' 행으로 보여준다
+    const unknownRows = P.unknownMachines()
+      .filter((u) => u.rows)
+      .map((u) => ({ no: u.no, room: '설비마스터 미등록', model: '', unknown: true }));
+    G.rows = P.machines.concat(unknownRows).filter((m) => {
       if (room && m.room !== room) return false;
       const segs = P.timeline.segments(m.no);
       if (q) {
@@ -425,7 +430,7 @@
       prevRoom = m.room;
       html +=
         '<div class="g-row' + (roomFirst ? ' room-first' : '') + '" style="top:' + i * G.row + 'px">' +
-        '<div class="lab"><b>' + esc(m.no) + '</b><span>' + esc(m.room + ' ' + (m.model || '')) + '</span></div>' +
+        '<div class="lab' + (m.unknown ? ' unknown' : '') + '"' + (m.unknown ? ' title="4_설비마스터에 없는 호기입니다. 설비마스터에 추가하면 방·작업자 기준이 적용됩니다"' : '') + '><b>' + esc(m.no) + '</b><span>' + esc(m.room + ' ' + (m.model || '')) + '</span></div>' +
         '<div class="track" style="width:' + width + 'px">' + weHtml + bars.join('') + '</div></div>';
     }
     body.innerHTML = html;
@@ -680,19 +685,23 @@
           fix =
             '<div class="cands">' +
             w.candidates
-              .map((c) => '<label class="check"><input type="checkbox" data-wplan="' + w.id + '" value="' + esc(c.planNo) + '"> ' + esc(c.planNo || '(계획번호 없음)') + ' · 미납 ' + nf(c.openQty) + (c.left !== c.openQty ? ' (남음 ' + nf(c.left) + ')' : '') + (c.refMachines.length ? ' · 설비 ' + esc(c.refMachines.join('/')) : '') + '</label>')
+              .map((c) => '<label class="check"><input type="checkbox" data-wplan="' + w.id + '" value="' + esc(c.planNo) + '"' + ((w.suggest || []).includes(c.planNo) ? ' checked' : '') + '> ' + esc(c.planNo || '(계획번호 없음)') + (c.orderDate != null ? ' · 발주 ' + E.fmtMD(c.orderDate) : '') + ' · 미납 ' + nf(c.openQty) + (c.left !== c.openQty ? ' (남음 ' + nf(c.left) + ')' : '') + (c.refMachines.length ? ' · 설비 ' + esc(c.refMachines.join('/')) : '') + '</label>')
               .join('') +
-            '<div class="row"><label for="wq' + w.id + '">이관 수량</label><input type="number" id="wq' + w.id + '" placeholder="비우면 고른 발주 잔량" style="width:150px"><button class="btn small primary" type="button" data-wfix="' + w.id + '">이 블록 지정</button></div></div>';
+            '<div class="row"><label for="wq' + w.id + '">이관 수량</label><input type="number" id="wq' + w.id + '" value="' + (w.suggestQty || '') + '" placeholder="비우면 고른 발주 잔량" style="width:150px"><button class="btn small primary" type="button" data-wfix="' + w.id + '">이 블록 지정</button></div>' +
+            (w.suggest && w.suggest.length ? '<div class="hint">발주일순으로 ' + (w.qty ? '수기 수량' : w.suggestQty ? '추정 수량(근무일×일생산량)' : '가장 이른 발주') + '만큼 미리 골라 두었습니다. 맞으면 그대로 [이 블록 지정]</div>' : '') +
+            '</div>';
         }
         if (w.status === '정상') fix = '<label class="check"><input type="checkbox" data-wskip="' + w.id + '"' + (w.skip ? '' : ' checked') + '> 반영</label>';
         return (
-          '<tr><td class="code">' + esc(w.fixedPart || w.part) + '</td><td class="code">' + esc(w.segs[0].label) + '</td><td>' + esc(w.machineList.join(', ')) + '</td><td class="when">' + when + '</td><td>' + esc((w.plans || []).join(', ')) + '</td><td class="num">' + (qty ? nf(qty) : '') + '</td><td class="reason">' + esc(w.reason || '') + '</td><td>' + fix + '</td></tr>'
+          '<tr><td class="code">' + esc(w.fixedPart || w.part) + '</td><td class="code">' + esc(w.segs[0].label) + (w.qty ? '' : ' <span class="pill warn">수량 표기 없음</span>') + '</td><td class="mlist">' + w.machineList.map((m) => (pv.planner.machineByNo[m] ? esc(m) : '<span class="late-text" title="4_설비마스터에 없는 호기">' + esc(m) + '?</span>')).join(', ') + '</td><td class="when">' + when + '</td><td>' + esc((w.plans || []).join(', ')) + '</td><td class="num">' + (qty ? nf(qty) + (w.estimated && !w.manualFix ? '<br><span class="pill warn">추정</span>' : '') : '') + '</td><td class="reason">' + esc(w.reason || '') + '</td><td>' + fix + '</td></tr>'
         );
       })
       .join('');
     $('manualBody').innerHTML =
       '<div class="mcard wide"><h3>초기 이관 (최초 전환 1회) · ' + esc(S.manualFile || '') + '</h3>' + guide + srcSel +
-      '<p class="hint">작업묶음 ' + nf(pv.waves.length) + '개 (같은 부품·같은 수기 수량 표기·이어지는 기간). 매칭 근거: 원본 설비1~A·개시/완료 → 미납 발주 1건 → 수량 일치. 수량은 발주 미납잔량 − 9번 미완료 확정잔량을 블록 근무일 비례로 나눕니다. 지난일정(수기 완료일이 오늘 이전)은 옮기지 않습니다.</p>' +
+      '<p class="hint">작업묶음 ' + nf(pv.waves.length) + '개 (같은 부품·같은 수기 수량 표기·이어지는 기간). 매칭 근거: 원본 설비1~A(+개시/완료 기간) → 남은 미납 발주 1건 → 수량 일치. ' +
+      '이관 수량은 수기 표기(/23K)대로, <b>표기가 없으면 블록 근무일 × 일생산량으로 추정</b>하고, 발주별 남은 수량(미납잔량 − 9번 확정잔량)을 앞 블록부터 차감해 한 발주가 두 번 잡히지 않게 합니다. 남는 수량은 자동 일정수립이 추가배정합니다. 지난일정(수기 완료일이 오늘 이전)은 옮기지 않습니다.</p>' +
+      manualMachineNote(pv) +
       '<div class="row">' + chips + '</div>' +
       '<div class="row"><button class="btn primary" type="button" id="manualApply">정상 묶음을 현행 일정으로 반영 (' + nf(rowsN) + '행)</button>' + (applied ? '<span class="hint">현재 반영 ' + nf(applied) + '행</span><button class="btn small danger" type="button" id="manualClear">반영 취소</button>' : '') + '</div>' +
       '<div class="table-wrap"><table class="grid"><thead><tr><th>부품코드</th><th>수기 표기</th><th>호기</th><th>기간</th><th>매칭 발주</th><th class="num">이관 수량</th><th>판정</th><th>조치</th></tr></thead><tbody>' +
@@ -711,7 +720,7 @@
         const w = pv.waves.find((x) => x.id === Number(b.dataset.wfix));
         const plans = [...document.querySelectorAll('[data-wplan="' + w.id + '"]:checked')].map((x) => x.value);
         if (!plans.length) return toast('발주를 하나 이상 고르세요');
-        window.CNCManual.resolve(w, plans, Number($('wq' + w.id).value) || 0, pv.planner);
+        if (!window.CNCManual.resolve(w, plans, Number($('wq' + w.id).value) || 0, pv.planner, pv)) return toast('고른 발주에 남은 수량이 없습니다. 이관 수량을 직접 넣으세요');
         toast(w.part + ' → ' + plans.join(', ') + ' 지정 (정상으로 이동)');
         renderManual();
       };
@@ -732,6 +741,20 @@
       });
     const c = $('manualClear');
     if (c) c.onclick = clearManual;
+  }
+  /** 수기 간트 호기 점검: 글자가 붙은 호기 칸, 설비마스터 미등록 호기, 추정 수량 묶음 수 */
+  function manualMachineNote(pv) {
+    const parsed = S.manualParsed;
+    if (!parsed) return '';
+    const P0 = pv.planner;
+    const tagged = parsed.machines.filter((m) => m.호기표기);
+    const unknown = [...new Set(parsed.segs.filter((s) => s.endDate >= today && !P0.machineByNo[s.machine]).map((s) => s.machine))];
+    const est = pv.estimated || 0;
+    const parts = [];
+    if (est) parts.push('수량 표기가 없어 <b>추정 수량</b>으로 이관한 정상 묶음 <b>' + nf(est) + '개</b> (이관 수량 칸에 "추정" 표시 · 다르면 [반영] 체크를 풀고 품목에서 고치세요)');
+    if (tagged.length) parts.push('호기 칸에 글자가 붙어 있던 행 ' + tagged.map((m) => esc(m.machine + m.호기표기)).join(', ') + ' → 앞 숫자를 호기로 읽음');
+    if (unknown.length) parts.push('<span class="late-text">4_설비마스터에 없는 호기 ' + unknown.map(esc).join(', ') + '</span> → 일정은 그대로 이관하고 간트에 "미등록" 행으로 보여줍니다. 설비마스터에 추가하면 자동배정 후보가 됩니다');
+    return parts.length ? '<ul class="hint">' + parts.map((x) => '<li>' + x + '</li>').join('') + '</ul>' : '';
   }
   function clearManual() {
     busy('반영 취소 중…', () => {
@@ -862,6 +885,28 @@
         '</p><ul>' + [...groups.entries()].map(([g, n]) => '<li>' + esc(g) + ' <b>' + n + '대</b></li>').join('') +
         '<li>기준게시일 이후 1인 하루 최대 신규셋팅 <b>' + peak + '건</b>' + (peakKey ? ' (' + esc(peakKey.split('|')[0]) + ', ' + E.fmtMD(Number(peakKey.split('|')[1])) + ')' : '') + '</li></ul></div>'
     );
+    // 설비마스터 미등록 호기 · 설비1~A 이상값
+    const unknown = P.unknownMachines();
+    const eqBad = P.items.filter((it) => it.eqBad && it.eqBad.length);
+    if (unknown.length || eqBad.length)
+      cards.push(
+        '<div class="mcard"><h3>호기 누락·이상값</h3><p class="hint">일정이나 원본 설비1~A에는 있는데 4_설비마스터에 없는 호기는 자동배정 후보에서 빠집니다 (기존 일정은 간트 "설비마스터 미등록" 행에 그대로 표시). 설비마스터에 호기·방을 추가하세요.</p><ul>' +
+          unknown
+            .slice(0, 30)
+            .map((u) => '<li><b>' + esc(u.no) + '</b>' + (u.rows ? ' · 확정/이관 일정 ' + nf(u.rows) + '행' : '') + (u.refs ? ' · 원본 설비1~A ' + nf(u.refs) + '건' : '') + '</li>')
+            .join('') +
+          (unknown.length > 30 ? '<li>외 ' + (unknown.length - 30) + '대</li>' : '') +
+          (eqBad.length
+            ? '<li class="late-text">원본 설비1~A에 호기가 아닌 값(날짜 등) ' + nf(eqBad.length) + '건 – 무시함: ' +
+              eqBad
+                .slice(0, 6)
+                .map((it) => esc(it.planNo + ' ' + it.partCode + ' [' + it.eqBad.join(',') + ']'))
+                .join(', ') +
+              (eqBad.length > 6 ? ' 외' : '') +
+              '</li>'
+            : '') +
+          '</ul></div>'
+      );
     // 미매핑 재질
     const mats = new Map();
     for (const it of P.items) {
@@ -956,7 +1001,8 @@
     $('dwEyebrow').innerHTML = statePill(it) + ' &nbsp;' + esc(it.planNo || '계획번호 없음') + ' · ' + esc(it.productCode);
     $('dwTitle').textContent = it.partCode;
     const facts = [
-      ['발주량', nf(it.qty)],
+      ['발주량', nf(it.qty) + (it.detailRows > 1 ? ' (원본 세부행 ' + it.detailRows + '개 합산)' : '')],
+      ['미납잔량', nf(it.openQty)],
       ['기존확정', nf(it.confirmedQty)],
       ['가배정', nf(P.draftQty(it.key))],
       ['남은 수량', nf(work)],
@@ -967,7 +1013,7 @@
       ['필요 장비일', days ? days + '일' : '-'],
       ['권장대수', it.rec || '-'],
       ['특별관리', it.special || '-'],
-      ['프로그램 설비', it.refMachines.length ? it.refMachines.join('/') : '-'],
+      ['프로그램 설비', (it.refMachines.length ? it.refMachines.join('/') : '-') + (it.eqBad && it.eqBad.length ? ' (호기 아닌 값 무시: ' + it.eqBad.join(',') + ')' : '')],
     ];
     let html = '<dl class="facts">' + facts.map(([k, v]) => '<div><dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd></div>').join('') + '</dl>';
     if (r.late > 0) {

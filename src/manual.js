@@ -7,7 +7,9 @@
  *   1) 원본 근거: 같은 부품 발주 중 설비1~A에 수기 호기가 있거나 개시~완료가 수기 기간과 겹치는 발주
  *   2) 미납이 남은 같은 부품 발주가 1건뿐
  *   3) 수기 수량(/xxK)이 발주량 또는 미납잔량과 같은(±0.5%) 발주, 또는 발주일순 연속 발주 합계
- * 수량은 발주 미납잔량 − 9번 미완료 확정잔량(v702)을 수기 블록 근무일 비례 100개 단위로 나눈다.
+ * 수량: 수기 표기 수량(/23K) → 없으면 블록 근무일 × 일생산량 추정. 발주별 남은 수량(미납잔량 − 9번 미완료
+ * 확정잔량, v702)을 묶음 시작일 순으로 차감하며, 수기 블록 근무일 비례 100개 단위로 나눈다.
+ * 수기 간트 A열의 호기는 "430,,", "402(A)"처럼 글자가 붙어 있어도 앞 숫자로 읽는다(learn.machineCell).
  */
 (function (root, factory) {
   const api = factory(root);
@@ -56,9 +58,16 @@
     return waves;
   }
 
+  const RAW_DATE_TOL = 10; // 원본 개시~완료와 수기 기간 겹침 허용 (일)
+
   /**
    * 수기 간트(learn.parseGantt 결과) → 이관 미리보기.
    * planner: 현재 Planner (원본·9번·달력). 반환 {waves:[{..., status, reason, rows, candidates}], counts}
+   *
+   * 담당자가 편의상 적은 간트라 수량 표기가 있는 블록도, 없는 블록도 있다.
+   *  - 수량 표기(/23K)가 있으면 그 수량만큼만 이관한다.
+   *  - 없으면 블록 근무일 × 품목 일생산량으로 추정한다(w.estimated).
+   *  - 발주별 남은 수량(미납잔량 − 9번 확정잔량)을 묶음 시작일 순으로 차감해 한 발주가 여러 블록에 이중으로 잡히지 않게 한다.
    */
   function preview(parsed, planner) {
     const today = planner.today;
@@ -68,8 +77,10 @@
     const parts = [...byPart.keys()];
     const confirmed = planner.model.confirmed || [];
     const segs = parsed.segs.filter((s) => s.part);
-    const waves = buildWaves(segs);
+    const waves = buildWaves(segs).sort((a, b) => a.start - b.start || (b.qty ? 1 : 0) - (a.qty ? 1 : 0) || a.part.localeCompare(b.part));
     waves.forEach((w, i) => (w.id = i + 1));
+    const budget = new Map();
+    const leftOf = (it) => (budget.has(it.key) ? budget.get(it.key) : Math.max(0, Math.round(it.openQty - it.confirmedQty)));
     for (const w of waves) {
       w.machineList = [...w.machines];
       w.rows = [];
@@ -87,7 +98,7 @@
           cands = byPart.get(fix[0]);
         }
       }
-      w.candidates = cands.map((it) => ({ key: it.key, planNo: it.planNo, productCode: it.productCode, partCode: it.partCode, qty: it.qty, openQty: it.openQty, left: Math.max(0, it.openQty - it.confirmedQty), orderDate: it.orderDate, refMachines: it.refMachines }));
+      w.candidates = cands.map((it) => ({ key: it.key, planNo: it.planNo, productCode: it.productCode, partCode: it.partCode, qty: it.qty, openQty: it.openQty, left: leftOf(it), orderDate: it.orderDate, refMachines: it.refMachines }));
       if (!cands.length) {
         w.status = '확인필요';
         w.reason = '원본에 같은 부품코드 발주 없음';
@@ -98,29 +109,56 @@
         w.reason = '원본 미납잔량 0 (입고 완료)';
         continue;
       }
+      // 9번에 같은 호기·부품·겹치는 기간이 이미 있으면 중복
+      const part = up(cands[0].partCode);
+      w.dupSegs = w.segs.filter((s) => confirmed.some((c) => E.machineNo(c.machine) === s.machine && up(c.partCode) === part && c.start <= s.endDate && c.end >= s.startDate));
+      if (w.dupSegs.length === w.segs.length) {
+        w.status = '9번중복';
+        w.reason = '9번 확정에 같은 호기·부품·기간이 이미 있음';
+        continue;
+      }
       const open = cands.filter((it) => it.openQty > 0).sort((a, b) => (a.orderDate || 0) - (b.orderDate || 0));
+      const avail = open.filter((it) => leftOf(it) > 0);
+      if (!avail.length) {
+        w.status = '잔량없음';
+        w.reason = open.some((it) => budget.has(it.key)) ? '같은 부품의 앞 수기 블록에서 미납잔량을 이미 모두 배정' : '미납잔량이 이미 9번 확정으로 모두 배정됨';
+        continue;
+      }
+      // 이관할 수량: 수기 표기 → 없으면 근무일 × 일생산량 추정
+      const live = w.segs.filter((s) => !w.dupSegs.includes(s));
+      const daily = avail[0].daily > 0 ? avail[0].daily : 0;
+      let target = w.qty || 0;
+      if (!target && daily) {
+        target = Math.ceil((live.reduce((a, s) => a + Math.max(1, cal.count(s.startDate, s.endDate)), 0) * daily) / 100) * 100;
+        w.estimated = true;
+        w.estimate = target;
+      }
       let plans = null;
       let how = '';
-      // 1) 원본 근거: 설비1~A 호기 또는 개시~완료 겹침
-      const raw = open.filter((it) => it.refMachines.some((m) => w.machines.has(m)) || (it.progStart != null && it.progEnd != null && it.progStart <= w.end && it.progEnd >= w.start));
+      // 1) 원본 근거: 설비1~A에 수기 호기가 있고(개시~완료가 있으면 기간도 겹침), 또는 설비 없이 개시~완료만 겹침
+      const overlap = (it) => it.progStart != null && it.progEnd != null && it.progStart <= w.end + RAW_DATE_TOL && it.progEnd >= w.start - RAW_DATE_TOL;
+      const hasDates = (it) => it.progStart != null && it.progEnd != null;
+      let raw = avail.filter((it) => it.refMachines.some((m) => w.machines.has(m)) && (!hasDates(it) || overlap(it)));
+      if (!raw.length) raw = avail.filter((it) => !it.refMachines.length && overlap(it));
+      const qtyHit = (it) => w.qty && (near(w.qty, it.qty) || near(w.qty, it.openQty) || near(w.qty, leftOf(it)));
       if (raw.length) {
         plans = raw;
         how = '원본 설비/일정 근거';
-      } else if (open.length === 1) {
-        plans = open;
-        how = '미납 발주 1건';
+      } else if (avail.length === 1) {
+        plans = avail;
+        how = open.length === 1 ? '미납 발주 1건' : '남은 미납 발주 1건';
       } else if (w.qty) {
-        const one = open.find((it) => near(w.qty, it.qty) || near(w.qty, it.openQty));
+        const one = avail.find(qtyHit);
         if (one) {
           plans = [one];
           how = '수량 일치';
         } else {
-          for (let i = 0; i < open.length && !plans; i++) {
+          for (let i = 0; i < avail.length && !plans; i++) {
             let sum = 0;
-            for (let j = i; j < open.length; j++) {
-              sum += open[j].openQty;
+            for (let j = i; j < avail.length; j++) {
+              sum += leftOf(avail[j]);
               if (near(w.qty, sum)) {
-                plans = open.slice(i, j + 1);
+                plans = avail.slice(i, j + 1);
                 how = '연속 발주 수량 합 일치';
                 break;
               }
@@ -131,42 +169,70 @@
       }
       if (!plans) {
         w.status = '확인필요';
-        w.reason = '같은 부품 미납 발주 ' + open.length + '건 중 특정 불가' + (w.qty ? ' (수기 ' + Math.round(w.qty).toLocaleString('ko-KR') + '개)' : ' (수기 수량 표기 없음)');
+        w.reason = '같은 부품 미납 발주 ' + avail.length + '건 중 특정 불가' + (w.qty ? ' (수기 ' + nfmt(w.qty) + '개)' : w.estimated ? ' (수기 수량 표기 없음, 추정 ' + nfmt(target) + '개)' : ' (수기 수량 표기 없음)');
+        w.suggest = suggestPlans(avail, target, leftOf);
+        w.suggestQty = target || null;
         continue;
       }
-      assign(w, plans, how, planner, confirmed, cal);
+      // 수기 수량과 딱 맞는 발주가 있으면 그 발주부터 채운다
+      if (w.qty && plans.length > 1) plans = plans.filter(qtyHit).concat(plans.filter((it) => !qtyHit(it)));
+      assign(w, plans, how, planner, target, leftOf);
+      for (const r of w.rows) {
+        const it = planner.itemByKey[E.itemKey(r.planNo, r.productCode, r.partCode)];
+        if (it) budget.set(it.key, leftOf(it) - r.qty);
+      }
     }
-    const counts = {};
-    for (const s of STATUS) counts[s] = 0;
-    for (const w of waves) counts[w.status] = (counts[w.status] || 0) + 1;
-    return { waves, counts, firstDate: parsed.firstDate };
+    return recount({ waves, firstDate: parsed.firstDate });
   }
 
-  /** 매칭된 발주들의 남은 수량을 작업묶음 블록에 근무일 비례로 나눠 이관 행을 만든다. */
-  function assign(w, plans, how, planner, confirmed, cal) {
-    const left = plans.map((it) => ({ it, q: Math.max(0, Math.round(it.openQty - it.confirmedQty)) }));
-    const total = left.reduce((a, x) => a + x.q, 0);
+  function recount(prev) {
+    prev.counts = {};
+    for (const s of STATUS) prev.counts[s] = 0;
+    for (const w of prev.waves) prev.counts[w.status] = (prev.counts[w.status] || 0) + 1;
+    prev.estimated = prev.waves.filter((w) => w.status === '정상' && w.estimated && !w.manualFix).length;
+    return prev;
+  }
+
+  const nfmt = (n) => Math.round(n).toLocaleString('ko-KR');
+
+  /** 확인필요 묶음에 미리 체크해 둘 발주: 발주일순으로 목표 수량이 찰 때까지 (목표가 없으면 가장 이른 1건) */
+  function suggestPlans(avail, target, leftOf) {
+    if (!target) return avail.slice(0, 1).map((it) => it.planNo);
+    const out = [];
+    let sum = 0;
+    for (const it of avail) {
+      if (sum >= target) break;
+      out.push(it.planNo);
+      sum += leftOf(it);
+    }
+    return out;
+  }
+
+  /**
+   * 매칭된 발주들의 남은 수량(leftOf)을 목표 수량(target, 0이면 남은 전량)만큼 작업묶음 블록에 근무일 비례로 나눠 이관 행을 만든다.
+   */
+  function assign(w, plans, how, planner, target, leftOf) {
+    const cal = planner.cal;
+    const left = plans.map((it) => ({ it, q: leftOf(it) }));
+    const sumLeft = left.reduce((a, x) => a + x.q, 0);
+    const total = target > 0 ? Math.min(sumLeft, Math.round(target)) : sumLeft;
     w.plans = plans.map((it) => it.planNo);
     w.how = how;
-    // 9번에 같은 호기·부품·겹치는 기간이 이미 있으면 중복
-    const dup = w.segs.filter((s) => confirmed.some((c) => E.machineNo(c.machine) === s.machine && up(c.partCode) === up(plans[0].partCode) && c.start <= s.endDate && c.end >= s.startDate));
-    if (dup.length === w.segs.length) {
-      w.status = '9번중복';
-      w.reason = '9번 확정에 같은 호기·부품·기간이 이미 있음';
-      return;
-    }
-    if (total <= 0) {
-      w.status = '잔량없음';
-      w.reason = '미납잔량이 이미 9번 확정으로 모두 배정됨';
-      return;
-    }
+    const dup = w.dupSegs || [];
     const segs = w.segs.filter((s) => !dup.includes(s)).sort((a, b) => a.startDate - b.startDate || a.machine - b.machine);
     const days = segs.map((s) => Math.max(1, cal.count(Math.max(s.startDate, planner.today), s.endDate)));
     const qty = E.distributeQtyHundreds(total, days);
     consume(w, segs, qty, left, planner);
-    const unknown = segs.filter((s) => !planner.machineByNo[s.machine]).map((s) => s.machine);
+    w.plans = [...new Set(w.rows.map((r) => r.planNo))];
+    const unknown = [...new Set(segs.filter((s) => !planner.machineByNo[s.machine]).map((s) => s.machine))];
+    const notes = [how];
+    if (w.estimated) notes.push('추정: 수기 수량 표기 없음 → 근무일×일생산량 ' + nfmt(total) + '개');
+    else if (w.qty && sumLeft < w.qty * 0.995) notes.push('수기 ' + nfmt(w.qty) + '개 > 남은 미납 ' + nfmt(sumLeft) + '개 → 남은 만큼');
+    if (w.fixedPart) notes.push('부품코드 보정 ' + w.part + '→' + w.fixedPart);
+    if (unknown.length) notes.push('설비마스터 미등록 호기 ' + unknown.join(','));
+    if (dup.length) notes.push('9번중복 ' + dup.length + '블록 제외');
     w.status = '정상';
-    w.reason = how + (w.fixedPart ? ' / 부품코드 보정 ' + w.part + '→' + w.fixedPart : '') + (unknown.length ? ' / 설비마스터 미등록 호기 ' + unknown.join(',') : '') + (dup.length ? ' / 9번중복 ' + dup.length + '블록 제외' : '');
+    w.reason = notes.join(' / ');
   }
 
   /**
@@ -201,27 +267,44 @@
     });
   }
 
-  /** 확인필요 묶음을 담당자가 고른 발주(계획번호 목록)와 총수량으로 다시 배분 */
-  function resolve(w, planNos, totalQty, planner) {
+  /** 다른 정상 묶음(반영 체크된 것)이 이미 쓴 발주별 수량 */
+  function usedByOthers(prev, w) {
+    const used = new Map();
+    for (const x of (prev && prev.waves) || []) {
+      if (x === w || x.status !== '정상' || x.skip) continue;
+      for (const r of x.rows) {
+        const k = E.itemKey(r.planNo, r.productCode, r.partCode);
+        used.set(k, (used.get(k) || 0) + r.qty);
+      }
+    }
+    return used;
+  }
+
+  /** 확인필요 묶음을 담당자가 고른 발주(계획번호 목록)와 총수량으로 다시 배분 (prev: 미리보기, 다른 묶음이 쓴 수량을 뺀다) */
+  function resolve(w, planNos, totalQty, planner, prev) {
     const cands = (w.candidates || []).filter((c) => planNos.includes(c.planNo));
     if (!cands.length) return false;
     const items = cands.map((c) => planner.itemByKey[c.key]).filter(Boolean);
+    const used = usedByOthers(prev, w);
     w.rows = [];
     const cal = planner.cal;
-    const segs = w.segs.slice().sort((a, b) => a.startDate - b.startDate || a.machine - b.machine);
+    const segs = w.segs.filter((s) => !(w.dupSegs || []).includes(s)).sort((a, b) => a.startDate - b.startDate || a.machine - b.machine);
     const days = segs.map((s) => Math.max(1, cal.count(Math.max(s.startDate, planner.today), s.endDate)));
-    const total = totalQty > 0 ? Math.round(totalQty) : items.reduce((a, it) => a + Math.max(0, it.openQty - it.confirmedQty), 0);
+    const left = items.map((it) => ({ it, q: Math.max(0, Math.round(it.openQty - it.confirmedQty - (used.get(it.key) || 0))) }));
+    const total = totalQty > 0 ? Math.round(totalQty) : left.reduce((a, x) => a + x.q, 0);
+    if (!(total > 0)) return false;
     const qty = E.distributeQtyHundreds(total, days);
-    const left = items.map((it) => ({ it, q: Math.max(0, Math.round(it.openQty - it.confirmedQty)) }));
     // 담당자가 총수량을 직접 넣으면 마지막 발주가 남은 수량을 받는다
     if (totalQty > 0 && left.length) {
       const sumLeft = left.reduce((a, x) => a + x.q, 0);
       if (total > sumLeft) left[left.length - 1].q += total - sumLeft;
     }
     consume(w, segs, qty, left, planner);
+    w.plans = [...new Set(w.rows.map((r) => r.planNo))];
     w.status = '정상';
     w.manualFix = true;
-    w.reason = '담당자 지정: ' + planNos.join(', ');
+    w.reason = '담당자 지정: ' + planNos.join(', ') + ' · ' + nfmt(total) + '개';
+    if (prev) recount(prev);
     return true;
   }
 

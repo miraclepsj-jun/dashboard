@@ -194,6 +194,8 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .g-row .lab { position: sticky; left: 0; z-index: 2; width: var(--left); flex: none; background: var(--surface); border-right: 1px solid var(--line); padding: 0 8px; display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
 .g-row .lab b { font-family: var(--mono); font-weight: 600; min-width: 30px; }
 .g-row .lab span { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.g-row .lab.unknown { background: var(--late-soft); }
+.g-row .lab.unknown span { color: var(--late); }
 .g-row.room-first { border-top: 2px solid var(--line); }
 .g-row .track { position: relative; flex: none; height: 100%; }
 .g-row .we { position: absolute; top: 0; bottom: 0; width: var(--day); background: var(--weekend); }
@@ -315,3 +317,4 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   .ptable td.c1 { background: #5a7fa6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .ptable td.c2, .ptable td.c3, .ptable th.pd.off { background: #ddd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+.grid td.mlist { min-width: 180px; max-width: 260px; font-family: var(--mono); font-size: 12px; }

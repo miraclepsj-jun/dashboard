@@ -91,3 +91,20 @@ test('가공기간 보정: 수량대별 계수를 기준 장비일수에 곱한�
   assert.equal(P2.planDays(it, 20000), 7); // ×1.4
   assert.equal(P1.planDays(it, 1000), 1); // 1만 미만 ×0.5 → 하루
 });
+
+test('수기 간트 호기 칸: 담당자가 글자를 붙여 쓴 호기도 앞 숫자로 읽는다', () => {
+  assert.deepEqual(L.machineCell({ v: 430 }), { no: '430', tag: '' });
+  assert.deepEqual(L.machineCell({ v: '430,,' }), { no: '430', tag: '' });
+  assert.deepEqual(L.machineCell({ v: '402(A)' }), { no: '402', tag: '(A)' });
+  assert.deepEqual(L.machineCell({ v: '606(작은거X)' }), { no: '606', tag: '(작은거X)' });
+  assert.equal(L.machineCell({ v: '신규호기' }), null);
+  assert.equal(L.machineCell({ v: 46155 }), null);
+  const wb = ganttWorkbook();
+  const ws = wb.Sheets['1~102호기(SK)'];
+  ws.A4 = { t: 's', v: '3,,' };
+  ws.E4 = { t: 's', v: 'PLDB103AR-B' };
+  ws['!ref'] = 'A1:R4';
+  const p = L.parseGantt(wb, { today: TODAY });
+  assert.ok(p.machines.some((m) => m.machine === '3'));
+  assert.equal(p.segs.find((s) => s.machine === '3').part, 'PLDB103AR-B');
+});
