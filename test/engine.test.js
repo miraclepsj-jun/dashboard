@@ -423,3 +423,35 @@ test('원본 세부행: 같은 계획/제품/부품 여러 행은 한 품목으�
   assert.deepEqual(it.refMachines, ['3', '4']);
   assert.equal(it.dupOf, undefined);
 });
+
+test('원본 반복 붙여넣기(번호·발주량·입고량 동일)는 한 번만, 다른 세부번호는 합산 (v738 fix18)', () => {
+  const m = Demo.build(TODAY);
+  m.confirmed = [];
+  const row = { planNo: 'R1', productCode: 'PR', partCode: 'PLDB602AR-B', lineNo: '1', qty: 965, received: 764, reqDate: TODAY + 30, material: 'SK-4', refMachines: [] };
+  m.raw = [row, Object.assign({}, row), Object.assign({}, row, { lineNo: '2', qty: 1000, received: 0 })];
+  const [it] = E.buildItems(m, { baseDate: TODAY + 1 });
+  assert.equal(it.detailRows, 2);
+  assert.equal(it.repeatRows, 1);
+  assert.equal(it.qty, 1965);
+  assert.equal(it.openQty, 201 + 1000);
+});
+
+test('발주별로 나눈 9번 행: 같은 날 시작하면 늦게 끝나는 행이 현재 작업, 간트는 막대 하나', () => {
+  const m = Demo.build(TODAY);
+  m.raw = [
+    { planNo: 'Q1', productCode: 'PQ', partCode: 'PLDB603AR-B', qty: 1500, received: 0, reqDate: TODAY + 30, material: 'SK-4', refMachines: [] },
+    { planNo: 'Q2', productCode: 'PQ', partCode: 'PLDB603AR-B', qty: 4600, received: 0, reqDate: TODAY + 30, material: 'SK-4', refMachines: [] },
+  ];
+  m.confirmed = [
+    { planNo: 'Q1', productCode: 'PQ', partCode: 'PLDB603AR-B', machine: '3', start: TODAY - 4, end: TODAY - 4, qty: 1500 },
+    { planNo: 'Q2', productCode: 'PQ', partCode: 'PLDB603AR-B', machine: '3', start: TODAY - 4, end: TODAY + 1, qty: 4600 },
+  ];
+  const P = new E.Planner(m, { today: TODAY });
+  assert.equal(P.timeline.status('3').delayed, false);
+  assert.equal(P.timeline.status('3').latest.planNo, 'Q2');
+  const g = P.timeline.displaySegments('3');
+  assert.equal(g.length, 1);
+  assert.equal(g[0].segs.length, 2);
+  assert.equal(g[0].qty, 6100);
+  assert.equal(g[0].e, TODAY + 1);
+});

@@ -406,9 +406,17 @@
         if (st) bars.push('<div class="bar block" style="' + st + '" title="' + esc(b.label + ' ' + E.fmtMD(b.s) + '~' + E.fmtMD(b.e)) + '">' + esc(b.label) + '</div>');
       }
       const status = tl.status(m.no);
-      for (const seg of tl.segments(m.no)) {
-        const st = place(seg.s, seg.kind === 'confirmed' && seg.complete ? seg.effEnd : seg.e);
+      for (const grp of tl.displaySegments(m.no)) {
+        const seg = grp.segs[0];
+        const st = place(grp.s, grp.end);
         if (!st) continue;
+        if (grp.segs.length > 1) {
+          // 같은 호기·같은 부품 확정 일정 묶음 (발주별 9번 행) → 막대 하나, 툴팁에 발주별 내역
+          const key = E.itemKey(seg.planNo, seg.productCode, seg.partCode);
+          const tip = '[확정] ' + grp.partCode + ' · 발주 ' + grp.segs.length + '건 · ' + nf(grp.qty) + '개 · ' + E.fmtMD(grp.s) + '~' + E.fmtMD(grp.e) + '\n' + grp.segs.map((x) => (x.planNo || '') + ' ' + x.productCode + ' ' + nf(x.planQty) + '개 ' + E.fmtMD(x.s) + '~' + E.fmtMD(x.e)).join('\n');
+          bars.push('<div class="bar confirmed multi' + (grp.complete ? ' done' : '') + '" style="' + st + ';' + partStyle(grp.partCode) + '" data-key="' + esc(P.itemByKey[key] ? key : '') + '" data-part="' + esc(E.up(grp.partCode)) + '" data-draft="" title="' + esc(tip) + '">' + esc(grp.partCode) + ' ×' + grp.segs.length + '</div>');
+          continue;
+        }
         const key = seg.kind === 'draft' ? seg.itemKey : E.itemKey(seg.planNo, seg.productCode, seg.partCode);
         const item = P.itemByKey[key];
         let cls = 'bar ' + seg.kind;
@@ -907,6 +915,17 @@
             : '') +
           '</ul></div>'
       );
+    // 원본 세부행 합산 · 반복 붙여넣기 (v730 / v738 fix18)
+    const detail = P.items.filter((it) => it.detailRows > 1);
+    const repeat = P.items.filter((it) => it.repeatRows > 0);
+    if (detail.length || repeat.length)
+      cards.push(
+        '<div class="mcard"><h3>원본 세부행</h3><p class="hint">같은 계획번호/제품코드/부품코드가 여러 행이면 한 품목으로 합산합니다. 번호·발주량·입고량까지 똑같은 행은 원본을 겹쳐 붙여넣은 것으로 보고 한 번만 셉니다 (v738 fix18).</p><ul>' +
+          '<li>세부행 합산 품목 <b>' + nf(detail.length) + '건</b></li>' +
+          '<li>반복 붙여넣기로 제외한 행 <b>' + nf(repeat.reduce((a, it) => a + it.repeatRows, 0)) + '행</b> (' + nf(repeat.length) + '품목)' +
+          (repeat.length ? ': ' + repeat.slice(0, 5).map((it) => esc(it.planNo + ' ' + it.partCode)).join(', ') + (repeat.length > 5 ? ' 외' : '') : '') +
+          '</li></ul></div>'
+      );
     // 미매핑 재질
     const mats = new Map();
     for (const it of P.items) {
@@ -1001,7 +1020,7 @@
     $('dwEyebrow').innerHTML = statePill(it) + ' &nbsp;' + esc(it.planNo || '계획번호 없음') + ' · ' + esc(it.productCode);
     $('dwTitle').textContent = it.partCode;
     const facts = [
-      ['발주량', nf(it.qty) + (it.detailRows > 1 ? ' (원본 세부행 ' + it.detailRows + '개 합산)' : '')],
+      ['발주량', nf(it.qty) + (it.detailRows > 1 ? ' (원본 세부행 ' + it.detailRows + '개 합산)' : '') + (it.repeatRows ? ' · 반복 붙여넣기 ' + it.repeatRows + '행 제외' : '')],
       ['미납잔량', nf(it.openQty)],
       ['기존확정', nf(it.confirmedQty)],
       ['가배정', nf(P.draftQty(it.key))],

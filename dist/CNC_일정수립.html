@@ -993,6 +993,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         progEnd: r.progEnd != null ? r.progEnd : null,
         remainQty: Math.max(0, openQty - cq),
         detailRows: r.detailRows,
+        repeatRows: r.repeatRows || 0,
         eqBad: r.eqBad || [],
         status,
       });
@@ -1002,17 +1003,26 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   /**
    * 같은 계획번호/제품코드/부품코드가 여러 행(분할 납품·세부행)이면 한 품목으로 합친다 (v730).
+   * 번호·발주량·입고량까지 똑같은 행은 원본을 겹쳐 붙여넣은 것으로 보고 한 번만 센다 (v738 fix18, repeatRows).
    * 발주량·입고량·필요수량은 합, 발주일·요구일은 가장 이른 날, 설비1~A는 합집합, 개시는 가장 이른 날·완료는 가장 늦은 날.
    * 미납잔량은 행마다 따로 계산해 더하므로(_open) 일부 세부행만 입고된 경우도 맞게 남는다.
    */
   function mergeDetailRows(raw) {
     const out = [];
     const byKey = {};
+    const seenLine = new Set();
     raw.forEach((r, idx) => {
       if (!str(r.planNo) && !str(r.productCode) && !str(r.partCode)) return;
       const key = itemKey(r.planNo, r.productCode, r.partCode);
       const qty = toNum(r.qty);
       const received = toNum(r.received);
+      // v738 fix18: ERP 원본을 겹쳐 붙여넣어 번호(D)·발주량·입고량까지 같은 세부행은 한 번만 센다
+      const sig = key + '|' + up(r.lineNo) + '|' + qty + '|' + received;
+      if (seenLine.has(sig)) {
+        if (byKey[key]) byKey[key].repeatRows = (byKey[key].repeatRows || 0) + 1;
+        return;
+      }
+      seenLine.add(sig);
       const open = qty > 0 ? Math.max(0, qty - received) : Math.max(0, toNum(r.need));
       const g = byKey[key];
       if (!g) {
@@ -1190,6 +1200,31 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     segments(m) {
       return this.byMachine.get(m) || [];
     }
+    /**
+     * 간트 표시용 (v738 fix14): 같은 호기·같은 부품의 확정 일정이 겹치거나 쉬는 날 없이 이어지면
+     * (한 수기 블록을 발주별로 나눈 9번 행들) 막대 하나로 묶는다. 9번 행 자체는 그대로 둔다.
+     * 반환 [{s, e, end(표시 끝), kind, partCode, qty, segs}]
+     */
+    displaySegments(m) {
+      const out = [];
+      const list = this.segments(m)
+        .slice()
+        .sort((a, b) => a.s - b.s || a.e - b.e);
+      for (const seg of list) {
+        const end = seg.kind === 'confirmed' && seg.complete ? seg.effEnd : seg.e;
+        const qty = seg.kind === 'confirmed' ? seg.planQty : seg.qty || 0;
+        const prev = out[out.length - 1];
+        if (prev && seg.kind === 'confirmed' && prev.kind === 'confirmed' && !!seg.complete === prev.complete && up(seg.partCode) === up(prev.partCode) && seg.s <= this.cal.nextWork(prev.end + 1)) {
+          prev.segs.push(seg);
+          prev.e = Math.max(prev.e, seg.e);
+          prev.end = Math.max(prev.end, end);
+          prev.qty += qty;
+          continue;
+        }
+        out.push({ s: seg.s, e: seg.e, end, kind: seg.kind, complete: !!seg.complete, partCode: seg.partCode, qty, segs: [seg] });
+      }
+      return out;
+    }
     /** 오늘 기준 작업상태 (v560). */
     status(m) {
       const today = this.today;
@@ -1197,7 +1232,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       for (const seg of this.segments(m)) {
         if (seg.kind !== 'confirmed') continue;
         if (seg.s > today) continue;
-        if (!latest || seg.s > latest.s) latest = seg;
+        // 같은 날 시작한 행이 여럿이면(한 블록을 발주별로 나눈 9번 행) 더 늦게 끝나는 행이 현재 작업
+        if (!latest || seg.s > latest.s || (seg.s === latest.s && seg.effEnd > latest.effEnd)) latest = seg;
       }
       const out = { work: '현재가용', remain: null, delayed: false, latest };
       if (!latest) return out;
@@ -2363,7 +2399,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         const tl = this.timeline;
         const prev = tl.prevSegmentEndingAt(d.machine, d.start - 1);
         const cont = prev && up(prev.partCode) === up(d.partCode);
-        const tags = [d.manual ? '수기선택' : '자동가배정', d.multi ? '다중호기/수량배분' : '', '달력일기준'].filter(Boolean).join('/');
+        const tags = [d.manual ? '수기선택' : '자동가배정', d.multi ? '다중호기/수량배분' : '', this.cal.workdays ? '근무일기준' : '달력일기준'].filter(Boolean).join('/');
         rows.push({
           planNo: d.planNo,
           productCode: d.productCode,
@@ -2625,7 +2661,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   // ───────────── 원본(일정관리 프로그램 복사분) ─────────────
   // 헤더가 없을 때 쓰는 고정 위치 (기존 매크로: E/G/H/I/L/O/S/AS/AT, 설비1~A = AF~AO)
   // 입고량 K/AB, 필요수량 U, 개시 P, 완료 Q, 종료 R (v670 초기이관·미납잔량 기준)
-  const RAW_FIXED = { orderDate: 2, planNo: 4, productCode: 6, partCode: 7, qty: 8, received: [10, 27], need: 20, open: 15, finish: 16, close: 17, reqDate: 11, h2: 14, workArea: 18, schedule: 19, material: 44, special: 45, eq: [31, 32, 33, 34, 35, 36, 37, 38, 39, 40] };
+  const RAW_FIXED = { orderDate: 2, lineNo: 3, planNo: 4, productCode: 6, partCode: 7, qty: 8, received: [10, 27], need: 20, open: 15, finish: 16, close: 17, reqDate: 11, h2: 14, workArea: 18, schedule: 19, material: 44, special: 45, eq: [31, 32, 33, 34, 35, 36, 37, 38, 39, 40] };
 
   function rawColumns(rows) {
     const hm = headerMap(rows, '부품코드');
@@ -2636,6 +2672,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       start: hm.start,
       cols: {
         orderDate: col(hm, '발주일', '발주일자'),
+        lineNo: col(hm, '번호'),
         planNo: col(hm, '계획번호'),
         productCode: col(hm, '제품코드'),
         partCode: col(hm, '부품코드'),
@@ -2672,6 +2709,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         planNo,
         productCode,
         partCode,
+        lineNo: str(at(row, cols.lineNo)),
         qty: toNum(at(row, cols.qty)),
         // 입고누계: 입고량 열이 둘(K/AB)이면 큰 값 (v670 RawReceivedQty)
         received: Math.max(0, ...cols.received.map((c) => toNum(at(row, c)))),
@@ -3654,6 +3692,38 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   const RAW_DATE_TOL = 10; // 원본 개시~완료와 수기 기간 겹침 허용 (일)
 
+  // v738 fix11: 담당자가 확인한 수기 표기 누락만 통일 (그 외 R1/R2 접미사는 자동으로 같다고 보지 않는다)
+  const DEFAULT_ALIASES = { 'BDGC210-DJS': 'BDGC210-DJSR1' };
+
+  /**
+   * v738 fix10: "TELK236Y1-DSK11.3K", "PLLK541R-Y-1.2K"처럼 슬래시 없이 수량이 붙은 표기.
+   * 잘라낸 앞부분이 원본 부품코드와 정확히 같을 때만 부품/수량으로 나눈다.
+   */
+  function splitTrailingQty(part, known) {
+    const m = /^(.{5,}?)-?([0-9][0-9.,]*)([KM])$/.exec(part);
+    if (!m || !known(m[1])) return null;
+    const v = parseFloat(m[2].replace(/,/g, ''));
+    if (!(v > 0)) return null;
+    return { part: m[1], qty: Math.round(v * (m[3] === 'M' ? 1e6 : 1000)) };
+  }
+
+  /** 수기 블록 부품코드 정리: 별칭(fix11) → 끝 수량 분리(fix10). 원문은 label에 남는다. */
+  function canonicalSegs(segs, known, aliases) {
+    return segs.map((s) => {
+      let part = up(s.part).replace(/\s+/g, '');
+      if (aliases[part]) part = aliases[part];
+      let qty = s.qty;
+      if (!known(part)) {
+        const t = splitTrailingQty(part, known);
+        if (t) {
+          part = t.part;
+          if (!qty) qty = t.qty;
+        }
+      }
+      return part === s.part && qty === s.qty ? s : Object.assign({}, s, { part, qty, rawPart: s.part });
+    });
+  }
+
   /**
    * 수기 간트(learn.parseGantt 결과) → 이관 미리보기.
    * planner: 현재 Planner (원본·9번·달력). 반환 {waves:[{..., status, reason, rows, candidates}], counts}
@@ -3663,14 +3733,20 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
    *  - 없으면 블록 근무일 × 품목 일생산량으로 추정한다(w.estimated).
    *  - 발주별 남은 수량(미납잔량 − 9번 확정잔량)을 묶음 시작일 순으로 차감해 한 발주가 여러 블록에 이중으로 잡히지 않게 한다.
    */
-  function preview(parsed, planner) {
+  function preview(parsed, planner, opts) {
+    opts = opts || {};
     const today = planner.today;
     const cal = planner.cal;
     const byPart = new Map();
     for (const it of planner.items) if (it.dupOf == null) (byPart.get(up(it.partCode)) || byPart.set(up(it.partCode), []).get(up(it.partCode))).push(it);
     const parts = [...byPart.keys()];
     const confirmed = planner.model.confirmed || [];
-    const segs = parsed.segs.filter((s) => s.part);
+    const aliases = Object.assign({}, DEFAULT_ALIASES, opts.aliases || {});
+    const segs = canonicalSegs(
+      parsed.segs.filter((s) => s.part),
+      (p) => byPart.has(p),
+      aliases
+    );
     const waves = buildWaves(segs).sort((a, b) => a.start - b.start || (b.qty ? 1 : 0) - (a.qty ? 1 : 0) || a.part.localeCompare(b.part));
     waves.forEach((w, i) => (w.id = i + 1));
     const budget = new Map();
@@ -3686,7 +3762,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       let cands = byPart.get(w.part) || [];
       if (!cands.length) {
         // 부품코드 오타: 편집거리 1~2이고 원본 설비1~A에 수기 호기가 있는 유일 부품만 보정 (v713)
-        const fix = parts.filter((p) => editDistance(p, w.part) <= 2 && byPart.get(p).some((it) => it.refMachines.some((m) => w.machines.has(m))));
+        // fix10: R1/R2 접미사만 다른 부품은 별개 부품이므로 오타로 보정하지 않는다
+        const suffixOnly = (p) => p === w.part + 'R1' || p === w.part + 'R2' || w.part === p + 'R1' || w.part === p + 'R2';
+        const fix = parts.filter((p) => !suffixOnly(p) && editDistance(p, w.part) <= 2 && byPart.get(p).some((it) => it.refMachines.some((m) => w.machines.has(m))));
         if (fix.length === 1) {
           w.fixedPart = fix[0];
           cands = byPart.get(fix[0]);
@@ -3912,7 +3990,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return out;
   }
 
-  return { STATUS, buildWaves, preview, resolve, toConfirmed, editDistance };
+  return { STATUS, DEFAULT_ALIASES, buildWaves, preview, resolve, toConfirmed, editDistance, splitTrailingQty };
 });
 </script>
 <script>/*
@@ -3986,7 +4064,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       for (const s of inSpan) {
         const prev = merged[merged.length - 1];
         if (prev && E.up(prev.partCode) === E.up(s.partCode) && cal.count(prev.end + 1, s.s - 1) === 0) {
-          prev.end = s.e;
+          prev.end = Math.max(prev.end, s.e);
           prev.qty += s.planQty || s.qty || 0;
           prev.actual += s.kind === 'confirmed' ? s.actualQty || 0 : 0;
         } else merged.push({ machine: mc.no, worker, partCode: s.partCode, start: s.s, end: s.e, qty: s.planQty || s.qty || 0, actual: s.kind === 'confirmed' ? s.actualQty || 0 : 0, kind: s.kind });
@@ -4425,9 +4503,17 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         if (st) bars.push('<div class="bar block" style="' + st + '" title="' + esc(b.label + ' ' + E.fmtMD(b.s) + '~' + E.fmtMD(b.e)) + '">' + esc(b.label) + '</div>');
       }
       const status = tl.status(m.no);
-      for (const seg of tl.segments(m.no)) {
-        const st = place(seg.s, seg.kind === 'confirmed' && seg.complete ? seg.effEnd : seg.e);
+      for (const grp of tl.displaySegments(m.no)) {
+        const seg = grp.segs[0];
+        const st = place(grp.s, grp.end);
         if (!st) continue;
+        if (grp.segs.length > 1) {
+          // 같은 호기·같은 부품 확정 일정 묶음 (발주별 9번 행) → 막대 하나, 툴팁에 발주별 내역
+          const key = E.itemKey(seg.planNo, seg.productCode, seg.partCode);
+          const tip = '[확정] ' + grp.partCode + ' · 발주 ' + grp.segs.length + '건 · ' + nf(grp.qty) + '개 · ' + E.fmtMD(grp.s) + '~' + E.fmtMD(grp.e) + '\n' + grp.segs.map((x) => (x.planNo || '') + ' ' + x.productCode + ' ' + nf(x.planQty) + '개 ' + E.fmtMD(x.s) + '~' + E.fmtMD(x.e)).join('\n');
+          bars.push('<div class="bar confirmed multi' + (grp.complete ? ' done' : '') + '" style="' + st + ';' + partStyle(grp.partCode) + '" data-key="' + esc(P.itemByKey[key] ? key : '') + '" data-part="' + esc(E.up(grp.partCode)) + '" data-draft="" title="' + esc(tip) + '">' + esc(grp.partCode) + ' ×' + grp.segs.length + '</div>');
+          continue;
+        }
         const key = seg.kind === 'draft' ? seg.itemKey : E.itemKey(seg.planNo, seg.productCode, seg.partCode);
         const item = P.itemByKey[key];
         let cls = 'bar ' + seg.kind;
@@ -4926,6 +5012,17 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             : '') +
           '</ul></div>'
       );
+    // 원본 세부행 합산 · 반복 붙여넣기 (v730 / v738 fix18)
+    const detail = P.items.filter((it) => it.detailRows > 1);
+    const repeat = P.items.filter((it) => it.repeatRows > 0);
+    if (detail.length || repeat.length)
+      cards.push(
+        '<div class="mcard"><h3>원본 세부행</h3><p class="hint">같은 계획번호/제품코드/부품코드가 여러 행이면 한 품목으로 합산합니다. 번호·발주량·입고량까지 똑같은 행은 원본을 겹쳐 붙여넣은 것으로 보고 한 번만 셉니다 (v738 fix18).</p><ul>' +
+          '<li>세부행 합산 품목 <b>' + nf(detail.length) + '건</b></li>' +
+          '<li>반복 붙여넣기로 제외한 행 <b>' + nf(repeat.reduce((a, it) => a + it.repeatRows, 0)) + '행</b> (' + nf(repeat.length) + '품목)' +
+          (repeat.length ? ': ' + repeat.slice(0, 5).map((it) => esc(it.planNo + ' ' + it.partCode)).join(', ') + (repeat.length > 5 ? ' 외' : '') : '') +
+          '</li></ul></div>'
+      );
     // 미매핑 재질
     const mats = new Map();
     for (const it of P.items) {
@@ -5020,7 +5117,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     $('dwEyebrow').innerHTML = statePill(it) + ' &nbsp;' + esc(it.planNo || '계획번호 없음') + ' · ' + esc(it.productCode);
     $('dwTitle').textContent = it.partCode;
     const facts = [
-      ['발주량', nf(it.qty) + (it.detailRows > 1 ? ' (원본 세부행 ' + it.detailRows + '개 합산)' : '')],
+      ['발주량', nf(it.qty) + (it.detailRows > 1 ? ' (원본 세부행 ' + it.detailRows + '개 합산)' : '') + (it.repeatRows ? ' · 반복 붙여넣기 ' + it.repeatRows + '행 제외' : '')],
       ['미납잔량', nf(it.openQty)],
       ['기존확정', nf(it.confirmedQty)],
       ['가배정', nf(P.draftQty(it.key))],

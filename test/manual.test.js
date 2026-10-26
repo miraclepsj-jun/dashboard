@@ -153,3 +153,19 @@ test('수기 일정 이관: 수량 표기 유무 혼재·발주별 남은 수량
   const Q = new E.Planner(m, { today: TODAY, manualConfirmed: rows });
   assert.deepEqual(Q.unknownMachines().map((u) => [u.no, u.rows]), [['9999', 1]]);
 });
+
+test('수기 표기 정리: 슬래시 없는 끝 수량(fix10)·확인된 부품 별칭(fix11)', () => {
+  const known = (p) => ['TELK236Y1-DSK', 'PLLK541R-Y'].includes(p);
+  assert.deepEqual(M.splitTrailingQty('TELK236Y1-DSK11.3K', known), { part: 'TELK236Y1-DSK', qty: 11300 });
+  assert.deepEqual(M.splitTrailingQty('PLLK541R-Y-1.2K', known), { part: 'PLLK541R-Y', qty: 1200 });
+  assert.equal(M.splitTrailingQty('PLDB101AR-B', known), null);
+  const m = model();
+  m.raw = [{ planNo: 'Z1', productCode: 'PZ', partCode: 'BDGC210-DJSR1', qty: 9000, received: 0, orderDate: TODAY - 9, material: 'SK-4', refMachines: [] }, { planNo: 'Y1', productCode: 'PY', partCode: 'TELK236Y1-DSK', qty: 20000, received: 0, orderDate: TODAY - 9, material: 'TK-B', refMachines: [] }];
+  const P = new E.Planner(m, { today: TODAY, useProgramAssignments: false });
+  const pv = M.preview({ firstDate: TODAY - 3, segs: [seg(4, 'BDGC210-DJS', 1, 3, { qty: 3000 }), seg(5, 'TELK236Y1-DSK11.3K', 1, 3)] }, P);
+  const a = pv.waves.find((w) => w.part === 'BDGC210-DJSR1');
+  assert.deepEqual([a.status, a.plans], ['정상', ['Z1']]);
+  const b = pv.waves.find((w) => w.part === 'TELK236Y1-DSK');
+  assert.equal(b.qty, 11300);
+  assert.equal(b.rows.reduce((x, r) => x + r.qty, 0), 11300);
+});

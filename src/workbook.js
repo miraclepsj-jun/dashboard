@@ -79,7 +79,7 @@
   // ───────────── 원본(일정관리 프로그램 복사분) ─────────────
   // 헤더가 없을 때 쓰는 고정 위치 (기존 매크로: E/G/H/I/L/O/S/AS/AT, 설비1~A = AF~AO)
   // 입고량 K/AB, 필요수량 U, 개시 P, 완료 Q, 종료 R (v670 초기이관·미납잔량 기준)
-  const RAW_FIXED = { orderDate: 2, planNo: 4, productCode: 6, partCode: 7, qty: 8, received: [10, 27], need: 20, open: 15, finish: 16, close: 17, reqDate: 11, h2: 14, workArea: 18, schedule: 19, material: 44, special: 45, eq: [31, 32, 33, 34, 35, 36, 37, 38, 39, 40] };
+  const RAW_FIXED = { orderDate: 2, lineNo: 3, planNo: 4, productCode: 6, partCode: 7, qty: 8, received: [10, 27], need: 20, open: 15, finish: 16, close: 17, reqDate: 11, h2: 14, workArea: 18, schedule: 19, material: 44, special: 45, eq: [31, 32, 33, 34, 35, 36, 37, 38, 39, 40] };
 
   function rawColumns(rows) {
     const hm = headerMap(rows, '부품코드');
@@ -90,6 +90,7 @@
       start: hm.start,
       cols: {
         orderDate: col(hm, '발주일', '발주일자'),
+        lineNo: col(hm, '번호'),
         planNo: col(hm, '계획번호'),
         productCode: col(hm, '제품코드'),
         partCode: col(hm, '부품코드'),
@@ -126,6 +127,7 @@
         planNo,
         productCode,
         partCode,
+        lineNo: str(at(row, cols.lineNo)),
         qty: toNum(at(row, cols.qty)),
         // 입고누계: 입고량 열이 둘(K/AB)이면 큰 값 (v670 RawReceivedQty)
         received: Math.max(0, ...cols.received.map((c) => toNum(at(row, c)))),

@@ -69,7 +69,7 @@
       for (const s of inSpan) {
         const prev = merged[merged.length - 1];
         if (prev && E.up(prev.partCode) === E.up(s.partCode) && cal.count(prev.end + 1, s.s - 1) === 0) {
-          prev.end = s.e;
+          prev.end = Math.max(prev.end, s.e);
           prev.qty += s.planQty || s.qty || 0;
           prev.actual += s.kind === 'confirmed' ? s.actualQty || 0 : 0;
         } else merged.push({ machine: mc.no, worker, partCode: s.partCode, start: s.s, end: s.e, qty: s.planQty || s.qty || 0, actual: s.kind === 'confirmed' ? s.actualQty || 0 : 0, kind: s.kind });

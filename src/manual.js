@@ -60,6 +60,38 @@
 
   const RAW_DATE_TOL = 10; // 원본 개시~완료와 수기 기간 겹침 허용 (일)
 
+  // v738 fix11: 담당자가 확인한 수기 표기 누락만 통일 (그 외 R1/R2 접미사는 자동으로 같다고 보지 않는다)
+  const DEFAULT_ALIASES = { 'BDGC210-DJS': 'BDGC210-DJSR1' };
+
+  /**
+   * v738 fix10: "TELK236Y1-DSK11.3K", "PLLK541R-Y-1.2K"처럼 슬래시 없이 수량이 붙은 표기.
+   * 잘라낸 앞부분이 원본 부품코드와 정확히 같을 때만 부품/수량으로 나눈다.
+   */
+  function splitTrailingQty(part, known) {
+    const m = /^(.{5,}?)-?([0-9][0-9.,]*)([KM])$/.exec(part);
+    if (!m || !known(m[1])) return null;
+    const v = parseFloat(m[2].replace(/,/g, ''));
+    if (!(v > 0)) return null;
+    return { part: m[1], qty: Math.round(v * (m[3] === 'M' ? 1e6 : 1000)) };
+  }
+
+  /** 수기 블록 부품코드 정리: 별칭(fix11) → 끝 수량 분리(fix10). 원문은 label에 남는다. */
+  function canonicalSegs(segs, known, aliases) {
+    return segs.map((s) => {
+      let part = up(s.part).replace(/\s+/g, '');
+      if (aliases[part]) part = aliases[part];
+      let qty = s.qty;
+      if (!known(part)) {
+        const t = splitTrailingQty(part, known);
+        if (t) {
+          part = t.part;
+          if (!qty) qty = t.qty;
+        }
+      }
+      return part === s.part && qty === s.qty ? s : Object.assign({}, s, { part, qty, rawPart: s.part });
+    });
+  }
+
   /**
    * 수기 간트(learn.parseGantt 결과) → 이관 미리보기.
    * planner: 현재 Planner (원본·9번·달력). 반환 {waves:[{..., status, reason, rows, candidates}], counts}
@@ -69,14 +101,20 @@
    *  - 없으면 블록 근무일 × 품목 일생산량으로 추정한다(w.estimated).
    *  - 발주별 남은 수량(미납잔량 − 9번 확정잔량)을 묶음 시작일 순으로 차감해 한 발주가 여러 블록에 이중으로 잡히지 않게 한다.
    */
-  function preview(parsed, planner) {
+  function preview(parsed, planner, opts) {
+    opts = opts || {};
     const today = planner.today;
     const cal = planner.cal;
     const byPart = new Map();
     for (const it of planner.items) if (it.dupOf == null) (byPart.get(up(it.partCode)) || byPart.set(up(it.partCode), []).get(up(it.partCode))).push(it);
     const parts = [...byPart.keys()];
     const confirmed = planner.model.confirmed || [];
-    const segs = parsed.segs.filter((s) => s.part);
+    const aliases = Object.assign({}, DEFAULT_ALIASES, opts.aliases || {});
+    const segs = canonicalSegs(
+      parsed.segs.filter((s) => s.part),
+      (p) => byPart.has(p),
+      aliases
+    );
     const waves = buildWaves(segs).sort((a, b) => a.start - b.start || (b.qty ? 1 : 0) - (a.qty ? 1 : 0) || a.part.localeCompare(b.part));
     waves.forEach((w, i) => (w.id = i + 1));
     const budget = new Map();
@@ -92,7 +130,9 @@
       let cands = byPart.get(w.part) || [];
       if (!cands.length) {
         // 부품코드 오타: 편집거리 1~2이고 원본 설비1~A에 수기 호기가 있는 유일 부품만 보정 (v713)
-        const fix = parts.filter((p) => editDistance(p, w.part) <= 2 && byPart.get(p).some((it) => it.refMachines.some((m) => w.machines.has(m))));
+        // fix10: R1/R2 접미사만 다른 부품은 별개 부품이므로 오타로 보정하지 않는다
+        const suffixOnly = (p) => p === w.part + 'R1' || p === w.part + 'R2' || w.part === p + 'R1' || w.part === p + 'R2';
+        const fix = parts.filter((p) => !suffixOnly(p) && editDistance(p, w.part) <= 2 && byPart.get(p).some((it) => it.refMachines.some((m) => w.machines.has(m))));
         if (fix.length === 1) {
           w.fixedPart = fix[0];
           cands = byPart.get(fix[0]);
@@ -318,5 +358,5 @@
     return out;
   }
 
-  return { STATUS, buildWaves, preview, resolve, toConfirmed, editDistance };
+  return { STATUS, DEFAULT_ALIASES, buildWaves, preview, resolve, toConfirmed, editDistance, splitTrailingQty };
 });
