@@ -215,16 +215,64 @@
     if (s.includes('SK-') || s.startsWith('SK')) return 'SK';
     return '';
   }
-  /** 반별 인원 "1번방 = 6" (한 줄에 하나, 쉼표로 여러 개도 가능, 숫자만 쓰면 'N번방') → {'1번방': 6} */
-  function parseRoomHeadcount(text) {
-    const out = {};
-    for (const part of String(text || '').split(/[\n,;]+/)) {
-      const m = /^\s*(.+?)\s*(?:=|:|\s)\s*(\d+(?:\.\d+)?)\s*(?:명)?\s*$/.exec(part);
-      if (!m) continue;
-      const room = /^\d+$/.test(m[1]) ? m[1] + '번방' : m[1].replace(/\s+/g, '');
+  /**
+   * 반별 인원·1인 한도 계획 (날짜별로 늘어나는 경우 포함). 한 줄(또는 쉼표)마다 하나:
+   *   "1번방 = 3"                 처음부터 3명
+   *   "1번방 = 5 (12/1부터)"       12/1부터 5명  ("@2026-12-01", "2026-12-01부터 1번방 = 5"도 됨)
+   *   "1인 = 7 (2027-01-04부터)"   그날부터 1인 하루 한도 7건 ("1인 한도", "1인당"도 됨)
+   * 월/일만 쓰면 today 기준으로 두 달 넘게 지난 날짜는 다음 해로 본다.
+   * 반환 {rooms:{반:[{from,n}]}, perPerson:[{from,n}], bad:[읽지 못한 줄]} (from=null은 처음부터)
+   */
+  function parseSetupPlan(text, today) {
+    const out = { rooms: {}, perPerson: [], bad: [] };
+    const ref = today != null ? today : todaySerial();
+    const DATE = /(\d{4}\s*[-./년]\s*\d{1,2}\s*[-./월]\s*\d{1,2}\s*일?|\d{1,2}\s*[/.월]\s*\d{1,2}\s*일?)/;
+    for (const raw of String(text || '').split(/[\n,;]+/)) {
+      let line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      let from = null;
+      const dm = new RegExp('[@(]?\\s*' + DATE.source + '\\s*(?:부터|~)?\\s*\\)?').exec(line);
+      if (dm) {
+        const t = dm[1].replace(/년|월/g, '/').replace(/일/g, '').replace(/\s+/g, '');
+        const y = E_year(ref);
+        let d = toSerial(t, y);
+        if (d != null && !/^\d{4}/.test(t) && d < ref - 60) d = toSerial(t, y + 1);
+        if (d == null) {
+          out.bad.push(raw.trim());
+          continue;
+        }
+        from = d;
+        line = (line.slice(0, dm.index) + ' ' + line.slice(dm.index + dm[0].length)).trim();
+      }
+      const m = /^\s*(.+?)\s*(?:=|:|\s)\s*(\d+(?:\.\d+)?)\s*(?:명|건)?\s*$/.exec(line);
+      if (!m) {
+        out.bad.push(raw.trim());
+        continue;
+      }
+      const key = m[1].replace(/\s+/g, '');
       const n = Number(m[2]);
-      if (room && n >= 0) out[room] = n;
+      if (/^1인/.test(key)) out.perPerson.push({ from, n });
+      else {
+        const room = /^\d+$/.test(key) ? key + '번방' : key;
+        (out.rooms[room] = out.rooms[room] || []).push({ from, n });
+      }
     }
+    return out;
+  }
+  function E_year(serial) {
+    return dateFromSerial(serial).getFullYear();
+  }
+  /** 날짜별 값 목록에서 day에 해당하는 값 (from이 day 이하인 마지막 항목) */
+  function valueOn(list, day) {
+    let v = null;
+    for (const x of list || []) if (x.from <= day) v = x.n;
+    return v;
+  }
+  /** 이전 형식 호환: "1번방 = 6" → {'1번방': 6} (날짜 없는 값만) */
+  function parseRoomHeadcount(text) {
+    const plan = parseSetupPlan(text);
+    const out = {};
+    for (const [room, l] of Object.entries(plan.rooms)) for (const x of l) if (x.from == null) out[room] = x.n;
     return out;
   }
   /** "SK 커터 = 4번방, 6번방" → [{mat:'SK', prod:'커터', rooms:Set(['4번방','6번방'])}] ('*'는 전체) */
@@ -957,18 +1005,57 @@
         this.groupOf[m.no] = str(m.room) || workerRoom[m.no] || '방 미지정';
         this.setupKeyOf[m.no] = '반 ' + this.groupOf[m.no];
       }
-      this.headcount = {};
+      // 날짜별 인원·1인 한도: 기본값(3_방마스터 '인원' 열 → 설정의 날짜 없는 값) + 날짜별 변경
+      const START = -Infinity;
+      this.headcountPlan = {};
+      const setBase = (room, n) => (this.headcountPlan[room] = [{ from: START, n }].concat((this.headcountPlan[room] || []).filter((x) => x.from !== START)));
       for (const r of model.rooms || []) {
         const n = toNum(r.headcount);
-        if (str(r.name) && n > 0) this.headcount[str(r.name)] = n;
+        if (str(r.name) && n > 0) setBase(str(r.name), n);
       }
-      Object.assign(this.headcount, this.opts.roomHeadcount || {});
-    }
-    /** 반의 하루 신규셋팅 한도 (0 = 제한 없음): 반 인원 × 1인 하루 한도 */
-    roomSetupLimit(room) {
+      for (const [room, n] of Object.entries(this.opts.roomHeadcount || {})) setBase(room, toNum(n));
+      const plan = this.opts.setupPlan || { rooms: {}, perPerson: [] };
+      for (const [room, list] of Object.entries(plan.rooms || {}))
+        for (const x of list) {
+          if (x.from == null) setBase(room, x.n);
+          else (this.headcountPlan[room] = this.headcountPlan[room] || []).push({ from: x.from, n: x.n });
+        }
       const per = this.opts.setupLimitPerWorkerDay != null ? this.opts.setupLimitPerWorkerDay : 5;
-      const n = this.headcount[room] || 0;
+      this.perPersonPlan = [{ from: START, n: per }];
+      for (const x of plan.perPerson || []) {
+        if (x.from == null) this.perPersonPlan[0] = { from: START, n: x.n };
+        else this.perPersonPlan.push({ from: x.from, n: x.n });
+      }
+      for (const l of Object.values(this.headcountPlan)) l.sort((a, b) => a.from - b.from);
+      this.perPersonPlan.sort((a, b) => a.from - b.from);
+      this.setupPlanBad = plan.bad || [];
+    }
+    /** day 기준 반 인원 (없으면 0) */
+    headcountOn(room, day) {
+      return valueOn(this.headcountPlan[room], day != null ? day : this.baseDate) || 0;
+    }
+    /** day 기준 1인 하루 신규셋팅 한도 */
+    perPersonOn(day) {
+      return valueOn(this.perPersonPlan, day != null ? day : this.baseDate) || 0;
+    }
+    /** 기준게시일(또는 day) 기준 반 인원 표 (화면 표시용) */
+    get headcount() {
+      const out = {};
+      for (const room of Object.keys(this.headcountPlan)) if (this.headcountOn(room)) out[room] = this.headcountOn(room);
+      return out;
+    }
+    /** 반의 그날 하루 신규셋팅 한도 (0 = 제한 없음): 그날 반 인원 × 그날 1인 하루 한도 */
+    roomSetupLimit(room, day) {
+      const per = this.perPersonOn(day);
+      const n = this.headcountOn(room, day);
       return per > 0 && n > 0 ? Math.round(per * n) : 0;
+    }
+    /** 기준게시일 뒤에 바뀌는 반 인원·1인 한도 [{from, room|null, n}] */
+    setupChanges() {
+      const out = [];
+      for (const [room, l] of Object.entries(this.headcountPlan)) for (const x of l) if (x.from > this.baseDate) out.push({ from: x.from, room, n: x.n });
+      for (const x of this.perPersonPlan) if (x.from > this.baseDate) out.push({ from: x.from, room: null, n: x.n });
+      return out.sort((a, b) => a.from - b.from);
     }
     _isContinuation(m, start, partCode) {
       const prev = this.timeline.prevSegmentEndingAt(m, start - 1);
@@ -990,10 +1077,11 @@
     startFor(m, from, days, partCode) {
       const tl = this.timeline;
       let s = tl.gapStart(m, from, days);
-      const limit = this.roomSetupLimit(this.groupOf[m]);
-      if (!limit || s == null) return s;
+      const room = this.groupOf[m];
       for (let guard = 0; guard < 90 && s != null; guard++) {
-        if (this._isContinuation(m, s, partCode) || this.setupsOn(m, s) < limit) return s;
+        // 한도는 시작하는 날의 반 인원 × 1인 한도 (날짜별로 늘어날 수 있음)
+        const limit = this.roomSetupLimit(room, s);
+        if (!limit || this._isContinuation(m, s, partCode) || this.setupsOn(m, s) < limit) return s;
         s = tl.gapStart(m, s + 1, days);
       }
       return s;
@@ -2025,6 +2113,7 @@
     parseMaterialMap,
     parseRoomRules,
     parseRoomHeadcount,
+    parseSetupPlan,
     exactMaterial,
     settingFamily,
     settingMatch,

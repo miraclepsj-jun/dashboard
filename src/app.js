@@ -36,7 +36,8 @@
     maxMachines: 6,
     perGroupMax: 1,
     setupLimitPerWorkerDay: 5,
-    // 반(방)별 인원 "1번방 = 6" – 반 하루 신규셋팅 한도 = 인원 × 1인 한도 (비우면 3_방마스터 '인원' 열)
+    // 반(방)별 인원 "1번방 = 6", 늘어나는 날은 "1번방 = 8 (12/1부터)", 1인 한도 변경은 "1인 = 7 (2027-01-04부터)"
+    // 반 하루 신규셋팅 한도 = 그날 인원 × 그날 1인 한도 (비우면 3_방마스터 '인원' 열)
     roomHeadcount: '',
     allowB: true,
     expandToDue: false,
@@ -85,7 +86,7 @@
       maxMachines: S.settings.maxMachines,
       perGroupMax: S.settings.perGroupMax,
       setupLimitPerWorkerDay: S.settings.setupLimitPerWorkerDay,
-      roomHeadcount: E.parseRoomHeadcount(S.settings.roomHeadcount),
+      setupPlan: E.parseSetupPlan(S.settings.roomHeadcount, today),
       allowB: S.settings.allowB,
       expandToDue: S.settings.expandToDue,
       delayPolicy: S.settings.delayPolicy,
@@ -902,19 +903,28 @@
       const v = P.setupsOn(d.machine, d.start);
       if (!draftPeak[room] || v > draftPeak[room].v) draftPeak[room] = { v, day: d.start };
     }
-    const lim = S.settings.setupLimitPerWorkerDay;
-    const noHead = [...groups.keys()].filter((g) => !P.headcount[g]);
+    const lim = P.perPersonOn();
+    const noHead = [...groups.keys()].filter((g) => !P.headcountOn(g));
+    const changes = P.setupChanges();
+    const changeText = (g) =>
+      changes
+        .filter((c) => c.room === g)
+        .map((c) => E.fmtMD(c.from) + '부터 ' + c.n + '명')
+        .join(', ');
     cards.push(
       '<div class="mcard"><h3>반(방) ' + groups.size + '개 · 반별 인원과 하루 신규셋팅</h3><p class="hint">분산형 배정은 한 품목을 한 반에 ' + S.settings.perGroupMax + '대까지만 넣고 다른 반의 가능한 호기로 나눕니다. ' +
-        (lim ? '반의 하루 신규셋팅이 <b>반 인원 × ' + lim + '건</b>을 넘으면 다음 날로 미룹니다. 반별 인원은 [기준 설정] → 반별 인원(없으면 3_방마스터 "인원" 열)에서 읽습니다. 호기별 담당작업자는 쓰지 않습니다.' : '신규셋팅 한도는 꺼져 있습니다.') +
+        (lim ? '반의 하루 신규셋팅이 <b>그날 반 인원 × 1인 한도(' + E.fmtMD(S.baseDate) + ' 기준 ' + lim + '건)</b>를 넘으면 다음 날로 미룹니다. 반별 인원과 날짜별 증원은 [기준 설정] → 반별 인원(없으면 3_방마스터 "인원" 열)에서 읽습니다. 호기별 담당작업자는 쓰지 않습니다.' : '신규셋팅 한도는 꺼져 있습니다.') +
+        (changes.some((c) => c.room == null) ? ' 1인 한도 변경 예정: ' + changes.filter((c) => c.room == null).map((c) => E.fmtYMD(c.from) + '부터 ' + c.n + '건').join(', ') + '.' : '') +
+        (P.setupPlanBad.length ? ' <span class="late-text">읽지 못한 반별 인원 줄: ' + P.setupPlanBad.map(esc).join(' / ') + '</span>' : '') +
         (lim && noHead.length ? ' <span class="late-text">인원 미입력 반 ' + noHead.map(esc).join(', ') + '은 한도를 적용하지 않습니다.</span>' : '') +
-        '</p><div class="table-wrap"><table class="grid"><thead><tr><th>반</th><th class="num">호기</th><th class="num">인원</th><th class="num">하루 한도</th><th class="num">기존 확정 최대</th><th class="num">가배정 넣은 날 최대</th></tr></thead><tbody>' +
+        '</p><div class="table-wrap"><table class="grid"><thead><tr><th>반</th><th class="num">호기</th><th class="num">인원</th><th class="num">하루 한도</th><th>증원 예정</th><th class="num">기존 확정 최대</th><th class="num">가배정 넣은 날 최대</th></tr></thead><tbody>' +
         [...groups.entries()]
           .map(([g, n]) => {
-            const L = P.roomSetupLimit(g);
+            const L = P.roomSetupLimit(g, S.baseDate);
             const pk = (x) => (x ? x.v + '건 (' + E.fmtMD(x.day) + ')' : '-');
-            const over = L && peakOf[g] && peakOf[g].v > L;
-            return '<tr><td>' + esc(g) + '</td><td class="num">' + n + '</td><td class="num">' + (P.headcount[g] ? nf(P.headcount[g]) + '명' : '<span class="late-text">미입력</span>') + '</td><td class="num">' + (L ? L + '건' : '-') + '</td><td class="num' + (over ? ' late-text' : '') + '">' + pk(peakOf[g]) + '</td><td class="num">' + pk(draftPeak[g]) + '</td></tr>';
+            const over = peakOf[g] && P.roomSetupLimit(g, peakOf[g].day) && peakOf[g].v > P.roomSetupLimit(g, peakOf[g].day);
+            const hc = P.headcountOn(g);
+            return '<tr><td>' + esc(g) + '</td><td class="num">' + n + '</td><td class="num">' + (hc ? nf(hc) + '명' : '<span class="late-text">미입력</span>') + '</td><td class="num">' + (L ? L + '건' : '-') + '</td><td>' + esc(changeText(g) || '-') + '</td><td class="num' + (over ? ' late-text' : '') + '">' + pk(peakOf[g]) + '</td><td class="num">' + pk(draftPeak[g]) + '</td></tr>';
           })
           .join('') +
         '</tbody></table></div><p class="hint">기존 확정(9번)이 이미 한도를 넘은 날에는 가배정 셋팅을 더 넣지 않고 다음 날로 미룹니다. 셋팅 수는 같은 호기에서 같은 부품을 이어 가공하는 경우를 빼고 셉니다.</p><div class="row"><button class="btn small" type="button" id="openHeadcount">반별 인원 입력</button></div></div>'

@@ -465,3 +465,24 @@ test('발주별로 나눈 9번 행: 같은 날 시작하면 늦게 끝나는 행
   assert.equal(g[0].qty, 6100);
   assert.equal(g[0].e, TODAY + 1);
 });
+
+test('반별 인원·1인 한도가 날짜별로 늘어나면 그날부터 한도가 커진다', () => {
+  const m = Demo.build(TODAY);
+  const ymd = (d) => E.fmtYMD(d);
+  const plan = E.parseSetupPlan(['1번방 = 1', '2번방 = 1', '3번방 = 1', '4번방 = 1', '5번방 = 1', '6번방 = 1', '6번방 = 3 (' + ymd(TODAY + 10) + '부터)', '1인 = 2 @' + ymd(TODAY + 20), '엉터리 줄'].join('\n'), TODAY);
+  assert.deepEqual(plan.bad, ['엉터리 줄']);
+  const P = new E.Planner(m, { today: TODAY, setupLimitPerWorkerDay: 1, setupPlan: plan });
+  assert.equal(P.roomSetupLimit('6번방', TODAY + 9), 1);
+  assert.equal(P.roomSetupLimit('6번방', TODAY + 10), 3);
+  assert.equal(P.roomSetupLimit('6번방', TODAY + 20), 6);
+  assert.equal(P.roomSetupLimit('1번방', TODAY + 20), 2);
+  assert.deepEqual(P.setupChanges().map((c) => [c.room, c.n]), [['6번방', 3], [null, 2]]);
+  P.autoPlan();
+  for (const d of P.drafts) {
+    if (P._isContinuation(d.machine, d.start, d.partCode)) continue;
+    const lim = P.roomSetupLimit(P.groupOf[d.machine], d.start);
+    assert.ok(P.setupsOn(d.machine, d.start) <= lim, d.machine + ' ' + ymd(d.start) + ' 셋팅 ' + P.setupsOn(d.machine, d.start) + ' > ' + lim);
+  }
+  // 월/일만 쓰면 두 달 넘게 지난 날짜는 다음 해
+  assert.equal(E.parseSetupPlan('1번방 = 2 (1/5부터)', E.serialFromYMD(2026, 10, 26)).rooms['1번방'][0].from, E.serialFromYMD(2027, 1, 5));
+});
