@@ -36,6 +36,8 @@
     maxMachines: 6,
     perGroupMax: 1,
     setupLimitPerWorkerDay: 5,
+    // 반(방)별 인원 "1번방 = 6" – 반 하루 신규셋팅 한도 = 인원 × 1인 한도 (비우면 3_방마스터 '인원' 열)
+    roomHeadcount: '',
     allowB: true,
     expandToDue: false,
     delayPolicy: 'block',
@@ -83,6 +85,7 @@
       maxMachines: S.settings.maxMachines,
       perGroupMax: S.settings.perGroupMax,
       setupLimitPerWorkerDay: S.settings.setupLimitPerWorkerDay,
+      roomHeadcount: E.parseRoomHeadcount(S.settings.roomHeadcount),
       allowB: S.settings.allowB,
       expandToDue: S.settings.expandToDue,
       delayPolicy: S.settings.delayPolicy,
@@ -438,7 +441,7 @@
       prevRoom = m.room;
       html +=
         '<div class="g-row' + (roomFirst ? ' room-first' : '') + '" style="top:' + i * G.row + 'px">' +
-        '<div class="lab' + (m.unknown ? ' unknown' : '') + '"' + (m.unknown ? ' title="4_설비마스터에 없는 호기입니다. 설비마스터에 추가하면 방·작업자 기준이 적용됩니다"' : '') + '><b>' + esc(m.no) + '</b><span>' + esc(m.room + ' ' + (m.model || '')) + '</span></div>' +
+        '<div class="lab' + (m.unknown ? ' unknown' : '') + '"' + (m.unknown ? ' title="4_설비마스터에 없는 호기입니다. 설비마스터에 추가하면 방(반) 기준이 적용됩니다"' : '') + '><b>' + esc(m.no) + '</b><span>' + esc(m.room + ' ' + (m.model || '')) + '</span></div>' +
         '<div class="track" style="width:' + width + 'px">' + weHtml + bars.join('') + '</div></div>';
     }
     body.innerHTML = html;
@@ -517,7 +520,7 @@
     const rep = S.learn;
     if (!rep) {
       $('learnBody').innerHTML =
-        '<div class="mcard"><h3>담당자 수기 간트에서 배정 습관 배우기</h3><p class="hint">[수기 간트 불러오기]로 방별 수기 간트 파일을 열면 수량대별 호기 수·가공기간, 실제 일생산량, 방/작업자 분산, 방마스터 밖 배정을 뽑아 자동배정과 나란히 보여줍니다. 가공기간 보정계수를 학습값으로 바꿀 수 있습니다.</p><p class="hint">' + esc(cur) + ' (가공1팀 수기 간트 9/28~11월분을 근무일 기준으로 다시 계산한 학습값이 기본. 근무일로 세면 1만~15만 개는 기준 장비일과 거의 같고, 앞서 보인 1.4배 차이는 주말·연휴 때문이었습니다)</p></div>';
+        '<div class="mcard"><h3>담당자 수기 간트에서 배정 습관 배우기</h3><p class="hint">[수기 간트 불러오기]로 방별 수기 간트 파일을 열면 수량대별 호기 수·가공기간, 실제 일생산량, 방 분산·반 하루 셋팅 수, 방마스터 밖 배정을 뽑아 자동배정과 나란히 보여줍니다. 가공기간 보정계수를 학습값으로 바꿀 수 있습니다.</p><p class="hint">' + esc(cur) + ' (가공1팀 수기 간트 9/28~11월분을 근무일 기준으로 다시 계산한 학습값이 기본. 근무일로 세면 1만~15만 개는 기준 장비일과 거의 같고, 앞서 보인 1.4배 차이는 주말·연휴 때문이었습니다)</p></div>';
       return;
     }
     const plan = S.planner.drafts.length ? L.summarizePlan(S.planner) : null;
@@ -553,9 +556,10 @@
     cards.push(
       '<div class="mcard"><h3>배정 습관</h3><ul>' +
         '<li>여러 호기 작업 ' + sp.multiJobs + '건 중 <b>한 방 안</b>에서 편성 ' + pct(sp.oneRoom, sp.multiJobs) + (plan ? ' (자동 ' + pct(plan.oneRoom, plan.multi) + ')' : '') + '</li>' +
-        '<li>호기마다 담당작업자가 모두 다름 ' + pct(sp.distinctWorkers, sp.multiJobs) + '</li>' +
         '<li>같은 날 동시에 시작 ' + pct(sp.sameDayStart, sp.multiJobs) + '</li>' +
-        '<li>작업자 1인 하루 신규셋팅 중앙 ' + rep.workerDay.p50 + '건 · 상위 5% ' + rep.workerDay.p95 + '건 · 최대 ' + rep.workerDay.max + '건 (현재 한도 ' + (S.settings.setupLimitPerWorkerDay || '없음') + ')</li></ul></div>'
+        '<li>반 하루 신규셋팅 (중앙/상위 5%/최대, 괄호는 현재 한도): ' +
+        (rep.roomSetups || []).map((r) => esc(r.room) + ' ' + r.p50 + '/' + r.p95 + '/' + r.max + '건' + (S.planner.roomSetupLimit(r.room) ? ' (' + S.planner.roomSetupLimit(r.room) + ')' : '')).join(' · ') +
+        '</li></ul></div>'
     );
     const fit = rep.fit;
     const tot = fit.t0 + fit.t1 + fit.t2 + fit.out;
@@ -796,22 +800,22 @@
     const head = out.days.map((x) => '<th class="pd' + (x.work ? '' : ' off') + '" title="' + esc(x.label) + '">' + E.fmtMD(x.d).split('/')[1] + '</th>').join('');
     const cells = (mini) => mini.map((v) => '<td class="pc c' + v + '"></td>').join('');
     const orders = out.orders
-      .map((r) => '<tr><td class="num">' + esc(r.machine) + '</td><td>' + esc(r.worker) + '</td><td class="code">' + esc(r.partCode) + '</td><td class="code">' + esc(r.planNo || '') + '</td><td>' + esc(r.source) + '</td><td class="num">' + nf(r.qty) + '</td><td class="num">' + nf(r.actual) + '</td><td class="num">' + nf(r.remain) + '</td><td class="when">' + E.fmtMD(r.start) + '~' + E.fmtMD(r.end) + '</td><td class="num"><b>' + nf(r.today) + '</b></td><td class="blank"></td><td class="blank"></td>' + cells(r.mini) + '</tr>')
+      .map((r) => '<tr><td class="num">' + esc(r.machine) + '</td><td class="code">' + esc(r.partCode) + '</td><td class="code">' + esc(r.planNo || '') + '</td><td>' + esc(r.source) + '</td><td class="num">' + nf(r.qty) + '</td><td class="num">' + nf(r.actual) + '</td><td class="num">' + nf(r.remain) + '</td><td class="when">' + E.fmtMD(r.start) + '~' + E.fmtMD(r.end) + '</td><td class="num"><b>' + nf(r.today) + '</b></td><td class="blank"></td><td class="blank"></td>' + cells(r.mini) + '</tr>')
       .join('');
-    const overdue = out.overdue.map((r) => '<tr><td class="num">' + esc(r.machine) + '</td><td>' + esc(r.worker) + '</td><td class="code">' + esc(r.partCode) + '</td><td class="code">' + esc(r.planNo || '') + '</td><td class="num">' + nf(r.qty) + '</td><td class="num">' + nf(r.actual) + '</td><td class="when">' + E.fmtMD(r.start) + '~' + E.fmtMD(r.end) + '</td></tr>').join('');
+    const overdue = out.overdue.map((r) => '<tr><td class="num">' + esc(r.machine) + '</td><td class="code">' + esc(r.partCode) + '</td><td class="code">' + esc(r.planNo || '') + '</td><td class="num">' + nf(r.qty) + '</td><td class="num">' + nf(r.actual) + '</td><td class="when">' + E.fmtMD(r.start) + '~' + E.fmtMD(r.end) + '</td></tr>').join('');
     const gantt = out.gantt
-      .map((g) => '<tr' + (g.empty ? ' class="emptyrow"' : '') + '><td class="num">' + esc(g.machine) + '</td><td>' + esc(g.worker) + '</td><td class="code">' + esc(g.partCode) + '</td><td class="num">' + (g.empty ? '' : nf(g.qty)) + '</td><td class="num">' + (g.empty ? '' : nf(g.actual)) + '</td><td class="when">' + (g.empty ? '' : E.fmtMD(g.start) + '~' + E.fmtMD(g.end)) + '</td>' + cells(g.mini) + '</tr>')
+      .map((g) => '<tr' + (g.empty ? ' class="emptyrow"' : '') + '><td class="num">' + esc(g.machine) + '</td><td class="code">' + esc(g.partCode) + '</td><td class="num">' + (g.empty ? '' : nf(g.qty)) + '</td><td class="num">' + (g.empty ? '' : nf(g.actual)) + '</td><td class="when">' + (g.empty ? '' : E.fmtMD(g.start) + '~' + E.fmtMD(g.end)) + '</td>' + cells(g.mini) + '</tr>')
       .join('');
     const title = esc(out.room) + ' · ' + E.fmtYMD(out.date) + ' (' + '일월화수목금토'[E.dateFromSerial(out.date).getDay()] + ')';
     $('printBody').innerHTML =
       '<section class="sheet"><h2>일일 생산지시서 · ' + title + '</h2><p class="hint">당일 ' + nf(out.orders.length) + '건 · 금일계획은 계산값이며 반장 확인 후 지시 · ■ 가공 배정일 / 회색 휴일</p>' +
-      '<div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>담당</th><th>부품코드</th><th>계획번호</th><th>구분</th><th class="num">배정총량</th><th class="num">누적실적</th><th class="num">잔량</th><th>가공기간</th><th class="num">금일계획</th><th>작업자</th><th>완료</th>' + head + '</tr></thead><tbody>' +
+      '<div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>부품코드</th><th>계획번호</th><th>구분</th><th class="num">배정총량</th><th class="num">누적실적</th><th class="num">잔량</th><th>가공기간</th><th class="num">금일계획</th><th>작업자</th><th>완료</th>' + head + '</tr></thead><tbody>' +
       (orders || '<tr><td colspan="12" class="hint">기준일에 가공하는 일정이 없습니다</td></tr>') +
       '</tbody></table></div>' +
-      (out.overdue.length ? '<h3>완료일 경과 확인후보 ' + out.overdue.length + '건 (9번 실적 입력 필요)</h3><div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>담당</th><th>부품코드</th><th>계획번호</th><th class="num">배정총량</th><th class="num">누적실적</th><th>가공기간</th></tr></thead><tbody>' + overdue + '</tbody></table></div>' : '') +
+      (out.overdue.length ? '<h3>완료일 경과 확인후보 ' + out.overdue.length + '건 (9번 실적 입력 필요)</h3><div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>부품코드</th><th>계획번호</th><th class="num">배정총량</th><th class="num">누적실적</th><th>가공기간</th></tr></thead><tbody>' + overdue + '</tbody></table></div>' : '') +
       '</section>' +
       '<section class="sheet"><h2>방별 간트 · ' + title + '부터 ' + out.span + '일</h2><p class="hint">같은 호기의 동일부품 연속가공은 한 줄 · 색은 계획 점유일이며 생산완료 표시가 아닙니다</p>' +
-      '<div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>담당</th><th>부품코드</th><th class="num">배정총량</th><th class="num">누적실적</th><th>가공기간</th>' + head + '</tr></thead><tbody>' + gantt + '</tbody></table></div></section>';
+      '<div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>부품코드</th><th class="num">배정총량</th><th class="num">누적실적</th><th>가공기간</th>' + head + '</tr></thead><tbody>' + gantt + '</tbody></table></div></section>';
   }
   function exportPrint() {
     const XLSX = window.XLSX;
@@ -875,23 +879,45 @@
           .join('') +
         '</tbody></table></div></div>'
     );
-    // 조(방) 구성과 작업자 신규셋팅
+    // 반(방) 구성 · 반별 인원 · 하루 신규셋팅 한도
     const groups = new Map();
     for (const mc of P.machines) groups.set(P.groupOf[mc.no], (groups.get(P.groupOf[mc.no]) || 0) + 1);
-    const workers = new Set(P.machines.map((mc) => P.workerByMachine[mc.no]).filter(Boolean));
-    let peak = 0;
-    let peakKey = '';
-    for (const [k, v] of P.setupCount)
-      if (Number(k.split('|')[1]) >= S.baseDate && k.startsWith('작업자') && v > peak) {
-        peak = v;
-        peakKey = k;
+    // 확정 일정만의 반 하루 셋팅 최대 / 가배정을 넣은 날의 셋팅 수 최대 (가배정은 한도 안에서만 시작)
+    const confDay = new Map();
+    for (const [mno, segs] of P.timeline.byMachine)
+      for (const seg of segs) {
+        if (seg.kind !== 'confirmed' || seg.s < S.baseDate || !P.groupOf[mno] || P._isContinuation(mno, seg.s, seg.partCode)) continue;
+        const k = P.groupOf[mno] + '|' + seg.s;
+        confDay.set(k, (confDay.get(k) || 0) + 1);
       }
+    const peakOf = {};
+    const draftPeak = {};
+    for (const [k, v] of confDay) {
+      const [room, day] = k.split('|');
+      if (!peakOf[room] || v > peakOf[room].v) peakOf[room] = { v, day: Number(day) };
+    }
+    for (const d of P.drafts) {
+      if (P._isContinuation(d.machine, d.start, d.partCode)) continue;
+      const room = P.groupOf[d.machine];
+      const v = P.setupsOn(d.machine, d.start);
+      if (!draftPeak[room] || v > draftPeak[room].v) draftPeak[room] = { v, day: d.start };
+    }
     const lim = S.settings.setupLimitPerWorkerDay;
+    const noHead = [...groups.keys()].filter((g) => !P.headcount[g]);
     cards.push(
-      '<div class="mcard"><h3>조(방) ' + groups.size + '개 · 담당작업자 ' + workers.size + '명</h3><p class="hint">분산형 배정은 한 품목을 한 방에 ' + S.settings.perGroupMax + '대까지만 넣고 다른 방의 가능한 호기로 나눕니다. ' +
-        (lim ? '작업자 1인의 하루 신규셋팅이 ' + lim + '건을 넘으면 다음 날로 미룹니다 (13_작업자운영마스터 담당작업자 기준, 담당작업자가 없는 호기는 제외).' : '작업자 신규셋팅 한도는 꺼져 있습니다.') +
-        '</p><ul>' + [...groups.entries()].map(([g, n]) => '<li>' + esc(g) + ' <b>' + n + '대</b></li>').join('') +
-        '<li>기준게시일 이후 1인 하루 최대 신규셋팅 <b>' + peak + '건</b>' + (peakKey ? ' (' + esc(peakKey.split('|')[0]) + ', ' + E.fmtMD(Number(peakKey.split('|')[1])) + ')' : '') + '</li></ul></div>'
+      '<div class="mcard"><h3>반(방) ' + groups.size + '개 · 반별 인원과 하루 신규셋팅</h3><p class="hint">분산형 배정은 한 품목을 한 반에 ' + S.settings.perGroupMax + '대까지만 넣고 다른 반의 가능한 호기로 나눕니다. ' +
+        (lim ? '반의 하루 신규셋팅이 <b>반 인원 × ' + lim + '건</b>을 넘으면 다음 날로 미룹니다. 반별 인원은 [기준 설정] → 반별 인원(없으면 3_방마스터 "인원" 열)에서 읽습니다. 호기별 담당작업자는 쓰지 않습니다.' : '신규셋팅 한도는 꺼져 있습니다.') +
+        (lim && noHead.length ? ' <span class="late-text">인원 미입력 반 ' + noHead.map(esc).join(', ') + '은 한도를 적용하지 않습니다.</span>' : '') +
+        '</p><div class="table-wrap"><table class="grid"><thead><tr><th>반</th><th class="num">호기</th><th class="num">인원</th><th class="num">하루 한도</th><th class="num">기존 확정 최대</th><th class="num">가배정 넣은 날 최대</th></tr></thead><tbody>' +
+        [...groups.entries()]
+          .map(([g, n]) => {
+            const L = P.roomSetupLimit(g);
+            const pk = (x) => (x ? x.v + '건 (' + E.fmtMD(x.day) + ')' : '-');
+            const over = L && peakOf[g] && peakOf[g].v > L;
+            return '<tr><td>' + esc(g) + '</td><td class="num">' + n + '</td><td class="num">' + (P.headcount[g] ? nf(P.headcount[g]) + '명' : '<span class="late-text">미입력</span>') + '</td><td class="num">' + (L ? L + '건' : '-') + '</td><td class="num' + (over ? ' late-text' : '') + '">' + pk(peakOf[g]) + '</td><td class="num">' + pk(draftPeak[g]) + '</td></tr>';
+          })
+          .join('') +
+        '</tbody></table></div><p class="hint">기존 확정(9번)이 이미 한도를 넘은 날에는 가배정 셋팅을 더 넣지 않고 다음 날로 미룹니다. 셋팅 수는 같은 호기에서 같은 부품을 이어 가공하는 경우를 빼고 셉니다.</p><div class="row"><button class="btn small" type="button" id="openHeadcount">반별 인원 입력</button></div></div>'
     );
     // 설비마스터 미등록 호기 · 설비1~A 이상값
     const unknown = P.unknownMachines();
@@ -947,14 +973,6 @@
         (prodMiss.size ? [...prodMiss.entries()].map(([k, v]) => '<li>' + esc(k) + ' <b>' + v + '건</b></li>').join('') : '<li>없음</li>') +
         '</ul></div>'
     );
-    // 작업자운영마스터 갱신용 양식
-    const virtual = (m.workers || []).filter((w) => /가상|테스트/.test(w.note || '')).length;
-    cards.push(
-      '<div class="mcard"><h3>담당작업자 정보</h3><p class="hint">' +
-        (virtual ? '<span class="late-text">13_작업자운영마스터의 ' + virtual + '개 호기가 "가상 작업자 테스트용"입니다.</span> ' : '') +
-        '작업자 분산과 1인 하루 신규셋팅 한도는 담당작업자 기준으로 계산합니다. 아래 버튼으로 호기·현재 담당작업자·방 목록을 복사해 실제 담당자를 채운 뒤 13_작업자운영마스터 A~C열에 붙여넣으세요.</p>' +
-        '<div class="row"><button class="btn small" type="button" id="copyWorkers">작업자 양식 복사 (' + nf(P.machines.length) + '대)</button></div></div>'
-    );
     // 완료확인 필요 호기
     const delayed = P.machines.filter((mc) => P.timeline.status(mc.no).delayed);
     cards.push(
@@ -988,8 +1006,12 @@
         '</div>'
     );
     $('masterList').innerHTML = '<div class="mgrid">' + cards.join('') + '</div>';
-    const cw = $('copyWorkers');
-    if (cw) cw.onclick = () => copyText(['호기\t담당작업자\t방'].concat(P.machines.map((mc) => mc.no + '\t' + (P.workerByMachine[mc.no] || '') + '\t' + mc.room)).join('\n'), '작업자 양식 ' + nf(P.machines.length) + '행을 복사했습니다');
+    const oh = $('openHeadcount');
+    if (oh)
+      oh.onclick = () => {
+        openSettings();
+        $('setHeadcount').focus();
+      };
     const cb = $('copyBdList');
     if (cb) cb.onclick = () => copyText([...bdMiss.keys()].join('\n'), 'BD 부품명 ' + bdMiss.size + '종을 복사했습니다');
   }
@@ -1059,7 +1081,7 @@
             return (
               '<tr data-draftrow="' + d.id + '"><td>' + (d.manual ? '수기' : '자동') + '</td>' +
               '<td><input type="text" class="w-mc" data-f="machine" value="' + esc(d.machine) + '" aria-label="호기"></td>' +
-              '<td>' + esc(P.groupOf[d.machine] || '') + (P.workerByMachine[d.machine] ? ' · ' + esc(P.workerByMachine[d.machine]) : '') + '</td>' +
+              '<td>' + esc(P.groupOf[d.machine] || '') + '</td>' +
               '<td><input type="date" data-f="start" value="' + E.fmtYMD(d.start) + '" aria-label="시작일"></td>' +
               '<td><input type="number" class="w-num" data-f="days" min="1" value="' + d.days + '" aria-label="장비일"></td>' +
               '<td class="when' + (late ? ' late-text' : '') + '">' + E.fmtMD(d.end) + '</td>' +
@@ -1114,12 +1136,12 @@
     if (cands.length) {
       const sel = new Set(preset);
       html +=
-        '<div class="table-wrap"><table class="grid cand-table"><thead><tr><th></th><th>순위</th><th>등급</th><th>호기</th><th>방</th><th>담당</th><th>기종</th><th>현재소재</th><th>소재비교</th><th>작업상태</th><th>가용구간</th><th class="num">점수</th><th>비고</th></tr></thead><tbody>' +
+        '<div class="table-wrap"><table class="grid cand-table"><thead><tr><th></th><th>순위</th><th>등급</th><th>호기</th><th>방</th><th>기종</th><th>현재소재</th><th>소재비교</th><th>작업상태</th><th>가용구간</th><th class="num">점수</th><th>비고</th></tr></thead><tbody>' +
         cands
           .slice(0, 80)
           .map(
             (c) =>
-              '<tr data-cand="' + esc(c.machine) + '"><td><input type="checkbox" aria-label="' + esc(c.machine) + '호기 선택" data-pick="' + esc(c.machine) + '"' + (sel.has(c.machine) ? ' checked' : '') + '></td><td class="num">' + c.rank + '</td><td>' + gradeHtml(c.grade) + '</td><td class="code"><b>' + esc(c.machine) + '</b></td><td>' + esc(c.room) + '</td><td>' + esc(P.workerByMachine[c.machine] || '') + '</td><td>' + esc(c.model) + '</td><td>' + esc(c.material) + '</td><td>' + esc(c.settingText) + '</td><td>' + esc(c.work) + '</td><td class="when">' + esc(c.availText) + '</td><td class="num">' + c.score + '</td><td class="reason">' + esc([c.roomReason, c.note].filter(Boolean).join(' / ')) + '</td></tr>'
+              '<tr data-cand="' + esc(c.machine) + '"><td><input type="checkbox" aria-label="' + esc(c.machine) + '호기 선택" data-pick="' + esc(c.machine) + '"' + (sel.has(c.machine) ? ' checked' : '') + '></td><td class="num">' + c.rank + '</td><td>' + gradeHtml(c.grade) + '</td><td class="code"><b>' + esc(c.machine) + '</b></td><td>' + esc(c.room) + '</td><td>' + esc(c.model) + '</td><td>' + esc(c.material) + '</td><td>' + esc(c.settingText) + '</td><td>' + esc(c.work) + '</td><td class="when">' + esc(c.availText) + '</td><td class="num">' + c.score + '</td><td class="reason">' + esc([c.roomReason, c.note].filter(Boolean).join(' / ')) + '</td></tr>'
           )
           .join('') +
         '</tbody></table></div>' +
@@ -1302,6 +1324,7 @@
     $('setMax').value = s.maxMachines;
     $('setPerGroup').value = s.perGroupMax;
     $('setSetupLimit').value = s.setupLimitPerWorkerDay;
+    $('setHeadcount').value = s.roomHeadcount || '';
     $('setAllowB').value = s.allowB ? '1' : '0';
     $('setExpand').value = s.expandToDue ? '1' : '0';
     $('setDelay').value = s.delayPolicy;
@@ -1331,6 +1354,7 @@
       maxMachines: num('setMax', 6, 1),
       perGroupMax: num('setPerGroup', 1, 1),
       setupLimitPerWorkerDay: num('setSetupLimit', 5, 0),
+      roomHeadcount: $('setHeadcount').value,
       allowB: $('setAllowB').value === '1',
       expandToDue: $('setExpand').value === '1',
       delayPolicy: $('setDelay').value,

@@ -1,7 +1,7 @@
 /*
  * 현장 수기 간트 학습.
  * 담당자가 방별 시트에 직접 그린 간트(행=호기, 열=날짜, 시작칸에 "부품코드/수량K(같이 도는 호기)" + 색칠 구간)를 읽어
- * 실제 배정 습관(호기 수, 가공기간, 방/작업자 분산, 방마스터 밖 배정)을 수치로 뽑고
+ * 실제 배정 습관(호기 수, 가공기간, 방 분산·반 하루 셋팅 수, 방마스터 밖 배정)을 수치로 뽑고
  * 자동배정에 쓸 수량대별 가공기간 보정계수와 기준 보완 제안을 만든다.
  */
 (function (root, factory) {
@@ -243,25 +243,26 @@
       .map((r) => ({ prod: r.prod, n: r.list.length, std: r.std, med: Math.round(med(r.list)), p25: Math.round(quant(r.list, 0.25)), p75: Math.round(quant(r.list, 0.75)) }))
       .sort((a, b) => b.n - a.n);
 
-    // 방/작업자 분산, 같은 날 시작
+    // 방 분산, 같은 날 시작
     const multi = jobs.filter((l) => new Set(l.map((s) => s.machine)).size > 1);
     const roomOf = (m) => (planner.machineByNo[m] ? planner.machineByNo[m].room : '?');
     const spread = {
       multiJobs: multi.length,
       oneRoom: multi.filter((l) => new Set(l.map((s) => roomOf(s.machine))).size === 1).length,
-      distinctWorkers: multi.filter((l) => {
-        const ws = l.map((s) => planner.workerByMachine[s.machine] || 'm' + s.machine);
-        return new Set(ws).size === ws.length;
-      }).length,
       sameDayStart: multi.filter((l) => new Set(l.map((s) => s.start)).size === 1).length,
     };
-    const workerDay = {};
+    // 반(방) 하루 신규셋팅 수 (반별 인원 한도 비교용)
+    const roomDay = {};
     for (const s of segs) {
       if (s.cont) continue;
-      const w = planner.workerByMachine[s.machine];
-      if (w) workerDay[w + '|' + s.start] = (workerDay[w + '|' + s.start] || 0) + 1;
+      const r = roomOf(s.machine);
+      if (r !== '?') roomDay[r + '|' + s.start] = (roomDay[r + '|' + s.start] || 0) + 1;
     }
-    const wd = Object.values(workerDay);
+    const byRoom = {};
+    for (const [k, v] of Object.entries(roomDay)) (byRoom[k.split('|')[0]] = byRoom[k.split('|')[0]] || []).push(v);
+    const roomSetups = Object.entries(byRoom)
+      .map(([room, l]) => ({ room, p50: quant(l, 0.5), p95: quant(l, 0.95), max: Math.max(...l) }))
+      .sort((a, b) => a.room.localeCompare(b.room, 'ko', { numeric: true }));
 
     // 방마스터 적합도와 밖 배정 조합
     const fit = { t0: 0, t1: 0, t2: 0, out: 0, unknown: 0 };
@@ -318,7 +319,7 @@
       factors,
       classRates,
       spread,
-      workerDay: { p50: quant(wd, 0.5), p95: quant(wd, 0.95), max: wd.length ? Math.max(...wd) : 0 },
+      roomSetups,
       fit,
       outsideList,
       matHints,

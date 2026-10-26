@@ -29,7 +29,8 @@ test('현장 출력: 당일 생산지시·금일계획·휴일·2주 간트 통�
   assert.equal(g.length, 1, '동일부품 연속은 한 줄');
   assert.equal(g[0].qty, 10000);
   const sh = Pr.toSheets(out);
-  assert.equal(sh.orders[1][9], '금일계획');
+  assert.equal(sh.orders[1][8], '금일계획');
+  assert.ok(!sh.orders[1].includes('담당작업자'), '호기별 담당작업자 열 없음');
   // 실적이 없으면 배정총량 ÷ 가공 근무일 (10/15~16, 2일 → 1000)
   assert.equal(Pr.build(P, '1번방', d(10, 16), 14, true).orders.find((r) => r.planNo === 'K2').today, 1000);
   // 휴일에는 금일계획 0

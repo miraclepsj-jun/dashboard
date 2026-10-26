@@ -193,6 +193,8 @@
       series: col(hm, '특수대상시리즈'),
       drawingRule: col(hm, '치수/도면확인조건'),
       autoUse: col(hm, '자동후보사용'),
+      // 반(방)별 인원: 신규셋팅 한도 = 인원 × 1인 하루 한도
+      headcount: col(hm, '인원', '반인원', '작업인원', '근무인원', '작업자수', '인원수'),
     };
     return rows
       .slice(hm.start)

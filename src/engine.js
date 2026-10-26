@@ -215,6 +215,18 @@
     if (s.includes('SK-') || s.startsWith('SK')) return 'SK';
     return '';
   }
+  /** 반별 인원 "1번방 = 6" (한 줄에 하나, 쉼표로 여러 개도 가능, 숫자만 쓰면 'N번방') → {'1번방': 6} */
+  function parseRoomHeadcount(text) {
+    const out = {};
+    for (const part of String(text || '').split(/[\n,;]+/)) {
+      const m = /^\s*(.+?)\s*(?:=|:|\s)\s*(\d+(?:\.\d+)?)\s*(?:명)?\s*$/.exec(part);
+      if (!m) continue;
+      const room = /^\d+$/.test(m[1]) ? m[1] + '번방' : m[1].replace(/\s+/g, '');
+      const n = Number(m[2]);
+      if (room && n >= 0) out[room] = n;
+    }
+    return out;
+  }
   /** "SK 커터 = 4번방, 6번방" → [{mat:'SK', prod:'커터', rooms:Set(['4번방','6번방'])}] ('*'는 전체) */
   function parseRoomRules(text) {
     const out = [];
@@ -929,9 +941,9 @@
     }
 
     /**
-     * 조 = 방 (4_설비마스터 '방' 열, 없으면 13_작업자운영마스터 '방' 열).
-     * 신규셋팅 한도는 사람 기준: 13_작업자운영마스터 담당작업자 1인당 하루 N건.
-     * 담당작업자가 없는 호기는 한도를 적용하지 않는다(호기 단독으로 계산).
+     * 조 = 반(방) (4_설비마스터 '방' 열, 없으면 13_작업자운영마스터 '방' 열).
+     * 신규셋팅 한도는 반 단위: 반 인원 × 1인 하루 N건 (호기별 담당작업자 지정은 쓰지 않는다).
+     * 반 인원은 [기준 설정]의 반별 인원 → 3_방마스터 '인원' 열 순. 인원이 없는 반은 한도를 적용하지 않는다.
      */
     _buildGroups(model) {
       const workerRoom = {};
@@ -943,9 +955,20 @@
       this.setupKeyOf = {};
       for (const m of this.machines) {
         this.groupOf[m.no] = str(m.room) || workerRoom[m.no] || '방 미지정';
-        const w = this.workerByMachine[m.no];
-        this.setupKeyOf[m.no] = w ? '작업자 ' + w : '호기 ' + m.no;
+        this.setupKeyOf[m.no] = '반 ' + this.groupOf[m.no];
       }
+      this.headcount = {};
+      for (const r of model.rooms || []) {
+        const n = toNum(r.headcount);
+        if (str(r.name) && n > 0) this.headcount[str(r.name)] = n;
+      }
+      Object.assign(this.headcount, this.opts.roomHeadcount || {});
+    }
+    /** 반의 하루 신규셋팅 한도 (0 = 제한 없음): 반 인원 × 1인 하루 한도 */
+    roomSetupLimit(room) {
+      const per = this.opts.setupLimitPerWorkerDay != null ? this.opts.setupLimitPerWorkerDay : 5;
+      const n = this.headcount[room] || 0;
+      return per > 0 && n > 0 ? Math.round(per * n) : 0;
     }
     _isContinuation(m, start, partCode) {
       const prev = this.timeline.prevSegmentEndingAt(m, start - 1);
@@ -963,11 +986,11 @@
     setupsOn(m, day) {
       return this.setupCount.get(this.setupKeyOf[m] + '|' + day) || 0;
     }
-    /** 빈 구간 + 작업자 1인 하루 신규셋팅 한도를 함께 만족하는 시작일. */
+    /** 빈 구간 + 반 하루 신규셋팅 한도(인원 × 1인 한도)를 함께 만족하는 시작일. */
     startFor(m, from, days, partCode) {
       const tl = this.timeline;
       let s = tl.gapStart(m, from, days);
-      const limit = this.opts.setupLimitPerWorkerDay != null ? this.opts.setupLimitPerWorkerDay : 5;
+      const limit = this.roomSetupLimit(this.groupOf[m]);
       if (!limit || s == null) return s;
       for (let guard = 0; guard < 90 && s != null; guard++) {
         if (this._isContinuation(m, s, partCode) || this.setupsOn(m, s) < limit) return s;
@@ -1126,7 +1149,6 @@
           const prev = start != null ? this.timeline.prevSegmentEndingAt(mc.no, start - 1) : null;
           if (prev && up(prev.partCode) === up(item.partCode) && up(prev.material) && up(prev.material) === up(item.material)) sameCont = 1;
         }
-        const worker = this.workerByMachine[mc.no] || '';
         out.push({
           machine: mc.no,
           room: str(mc.room),
@@ -1147,8 +1169,7 @@
           roomReason: re.reason,
           note,
           sameCont,
-          worker,
-          setupLoad: worker && start != null ? this._workerSetups(worker, start) : 0,
+          setupLoad: start != null ? this.setupsOn(mc.no, start) : 0,
           cont: this._continuationScore(history, mc.no, from),
           roomNo: parseInt(str(mc.room), 10) || 99,
         });
@@ -1161,7 +1182,7 @@
         const o = opPriority(b.work) - opPriority(a.work);
         if (o) return o;
         if (a.score !== b.score) return b.score - a.score;
-        if (a.worker && b.worker && a.setupLoad !== b.setupLoad) return a.setupLoad - b.setupLoad;
+        if (a.setupLoad !== b.setupLoad) return a.setupLoad - b.setupLoad;
         if (a.cont !== b.cont) return b.cont - a.cont;
         if (a.roomNo !== b.roomNo) return a.roomNo - b.roomNo;
         return Number(a.machine) - Number(b.machine);
@@ -1203,11 +1224,6 @@
       if (h[m] == null) return 0;
       const gap = post - h[m];
       return gap <= 0 ? 2 : gap <= 3 ? 1 : 0;
-    }
-    _workerSetups(worker, day) {
-      let n = 0;
-      for (const m of this.machinesByWorker[worker] || []) for (const seg of this.timeline.segments(m)) if (seg.s === day) n++;
-      return n;
     }
 
     /**
@@ -1448,35 +1464,29 @@
         if (tier === 3 && !allowB) continue;
         const start = this.startFor(c.machine, from, perDays, partCode);
         if (start == null) continue;
-        pool.push({ c, tier, key: start - (c.sameCont ? 1 : 0) + tier * wait, group: this.groupOf[c.machine], worker: this.workerByMachine[c.machine] || 'm' + c.machine });
+        pool.push({ c, tier, key: start - (c.sameCont ? 1 : 0) + tier * wait, group: this.groupOf[c.machine] });
       }
       pool.sort((a, b) => a.key - b.key || b.c.score - a.c.score || a.c.rank - b.c.rank);
       if (!pool.length) return [];
       const picked = [];
       const usedGroup = new Map();
-      const usedWorker = new Set();
       const take = (p) => {
         picked.push(p);
         usedGroup.set(p.group, (usedGroup.get(p.group) || 0) + 1);
-        usedWorker.add(p.worker);
       };
       if (perGroup) {
         const head = pool.filter((p) => p.tier === pool[0].tier && p.key <= pool[0].key + wait);
         for (let lim = perGroup; picked.length < count && lim <= count; lim++)
-          for (const newWorkerOnly of [true, false])
-            for (const p of head) {
-              if (picked.length >= count) break;
-              if (picked.includes(p) || (usedGroup.get(p.group) || 0) >= lim) continue;
-              if (newWorkerOnly && usedWorker.has(p.worker)) continue;
-              take(p);
-            }
+          for (const p of head) {
+            if (picked.length >= count) break;
+            if (picked.includes(p) || (usedGroup.get(p.group) || 0) >= lim) continue;
+            take(p);
+          }
       }
-      for (const newWorkerOnly of perGroup ? [true, false] : [false])
-        for (const p of pool) {
-          if (picked.length >= count) break;
-          if (picked.includes(p) || (newWorkerOnly && usedWorker.has(p.worker))) continue;
-          take(p);
-        }
+      for (const p of pool) {
+        if (picked.length >= count) break;
+        if (!picked.includes(p)) take(p);
+      }
       return picked.map((p) => p.c);
     }
 
@@ -1835,10 +1845,10 @@
     initialRows() {
       const rows = [];
       for (const c of this.manualRows)
-        rows.push({ planNo: c.planNo, productCode: c.productCode, partCode: c.partCode, machine: Number(c.machine), start: c.start, end: c.end, qty: c.qty, newSetup: 'Y', worker: this.workerByMachine[machineNo(c.machine)] || '', note: c.note, initial: true });
+        rows.push({ planNo: c.planNo, productCode: c.productCode, partCode: c.partCode, machine: Number(c.machine), start: c.start, end: c.end, qty: c.qty, newSetup: 'Y', worker: '', note: c.note, initial: true });
       if (this.initial.used)
         for (const c of this.initial.rows)
-          rows.push({ planNo: c.planNo, productCode: c.productCode, partCode: c.partCode, machine: Number(c.machine), start: c.start, end: c.end, qty: c.qty, newSetup: 'Y', worker: this.workerByMachine[c.machine] || '', note: c.note, initial: true });
+          rows.push({ planNo: c.planNo, productCode: c.productCode, partCode: c.partCode, machine: Number(c.machine), start: c.start, end: c.end, qty: c.qty, newSetup: 'Y', worker: '', note: c.note, initial: true });
       return rows.sort((a, b) => a.start - b.start || a.machine - b.machine);
     }
 
@@ -1847,7 +1857,7 @@
       const rows = [];
       const sorted = this.drafts.slice().sort((a, b) => a.start - b.start || Number(a.machine) - Number(b.machine));
       for (const d of sorted) {
-        const worker = this.workerByMachine[d.machine] || '';
+        const worker = '';
         const tl = this.timeline;
         const prev = tl.prevSegmentEndingAt(d.machine, d.start - 1);
         const cont = prev && up(prev.partCode) === up(d.partCode);
@@ -2014,6 +2024,7 @@
     materialGroup,
     parseMaterialMap,
     parseRoomRules,
+    parseRoomHeadcount,
     exactMaterial,
     settingFamily,
     settingMatch,

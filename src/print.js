@@ -32,7 +32,6 @@
         .filter((s) => includeDrafts || s.kind !== 'draft')
         .slice()
         .sort((a, b) => a.s - b.s);
-      const worker = planner.workerByMachine[mc.no] || '';
       for (const s of segs) {
         const qty = s.planQty || s.qty || 0;
         const actual = s.kind === 'confirmed' ? s.actualQty || 0 : 0;
@@ -40,7 +39,6 @@
         const row = {
           machine: mc.no,
           room: mc.room,
-          worker,
           partCode: s.partCode,
           productCode: s.productCode,
           planNo: s.planNo,
@@ -72,11 +70,11 @@
           prev.end = Math.max(prev.end, s.e);
           prev.qty += s.planQty || s.qty || 0;
           prev.actual += s.kind === 'confirmed' ? s.actualQty || 0 : 0;
-        } else merged.push({ machine: mc.no, worker, partCode: s.partCode, start: s.s, end: s.e, qty: s.planQty || s.qty || 0, actual: s.kind === 'confirmed' ? s.actualQty || 0 : 0, kind: s.kind });
+        } else merged.push({ machine: mc.no, partCode: s.partCode, start: s.s, end: s.e, qty: s.planQty || s.qty || 0, actual: s.kind === 'confirmed' ? s.actualQty || 0 : 0, kind: s.kind });
       }
       for (const g of merged) g.mini = days.map((x) => (x.d >= g.start && x.d <= g.end ? (x.work ? 1 : 2) : x.work ? 0 : 3));
       if (merged.length) gantt.push(...merged);
-      else gantt.push({ machine: mc.no, worker, partCode: '', empty: true, mini: days.map((x) => (x.work ? 0 : 3)) });
+      else gantt.push({ machine: mc.no, partCode: '', empty: true, mini: days.map((x) => (x.work ? 0 : 3)) });
     }
     return { room, date, span, days, orders, overdue, gantt };
   }
@@ -85,15 +83,15 @@
   function toSheets(out) {
     const dayHead = out.days.map((x) => E.fmtMD(x.d));
     const mark = (v) => (v === 1 ? '■' : v === 2 || v === 3 ? '휴' : '');
-    const orders = [['일일 생산지시서 ' + (out.room || '전체') + ' / ' + E.fmtYMD(out.date)], ['호기', '담당작업자', '부품코드', '계획번호', '구분', '배정총량', '누적실적', '잔량', '가공기간', '금일계획', '작업자', '완료'].concat(dayHead)];
-    for (const r of out.orders) orders.push([Number(r.machine), r.worker, r.partCode, r.planNo, r.source, r.qty, r.actual, r.remain, E.fmtMD(r.start) + '~' + E.fmtMD(r.end), r.today, '', ''].concat(r.mini.map(mark)));
+    const orders = [['일일 생산지시서 ' + (out.room || '전체') + ' / ' + E.fmtYMD(out.date)], ['호기', '부품코드', '계획번호', '구분', '배정총량', '누적실적', '잔량', '가공기간', '금일계획', '작업자', '완료'].concat(dayHead)];
+    for (const r of out.orders) orders.push([Number(r.machine), r.partCode, r.planNo, r.source, r.qty, r.actual, r.remain, E.fmtMD(r.start) + '~' + E.fmtMD(r.end), r.today, '', ''].concat(r.mini.map(mark)));
     if (out.overdue.length) {
       orders.push([]);
       orders.push(['완료일 경과 확인후보 (실적 확인 필요)']);
-      for (const r of out.overdue) orders.push([Number(r.machine), r.worker, r.partCode, r.planNo, r.source, r.qty, r.actual, r.remain, E.fmtMD(r.start) + '~' + E.fmtMD(r.end)]);
+      for (const r of out.overdue) orders.push([Number(r.machine), r.partCode, r.planNo, r.source, r.qty, r.actual, r.remain, E.fmtMD(r.start) + '~' + E.fmtMD(r.end)]);
     }
-    const gantt = [['방별 간트 ' + (out.room || '전체') + ' / ' + E.fmtYMD(out.date) + '부터 ' + out.span + '일'], ['호기', '담당작업자', '부품코드', '배정총량', '누적실적', '가공기간'].concat(dayHead)];
-    for (const g of out.gantt) gantt.push([Number(g.machine), g.worker, g.partCode, g.empty ? '' : g.qty, g.empty ? '' : g.actual, g.empty ? '' : E.fmtMD(g.start) + '~' + E.fmtMD(g.end)].concat(g.mini.map(mark)));
+    const gantt = [['방별 간트 ' + (out.room || '전체') + ' / ' + E.fmtYMD(out.date) + '부터 ' + out.span + '일'], ['호기', '부품코드', '배정총량', '누적실적', '가공기간'].concat(dayHead)];
+    for (const g of out.gantt) gantt.push([Number(g.machine), g.partCode, g.empty ? '' : g.qty, g.empty ? '' : g.actual, g.empty ? '' : E.fmtMD(g.start) + '~' + E.fmtMD(g.end)].concat(g.mini.map(mark)));
     return { orders, gantt };
   }
 

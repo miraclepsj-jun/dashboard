@@ -158,8 +158,10 @@
       <input type="number" id="setMax" min="1" max="30" value="6">
       <label for="setPerGroup">한 품목이 한 방(조)에 쓰는 호기 수</label>
       <input type="number" id="setPerGroup" min="1" max="10" value="1">
-      <label for="setSetupLimit">작업자 1인 하루 신규셋팅 한도 (0=제한 없음)</label>
+      <label for="setSetupLimit">1인 하루 신규셋팅 한도 (0=제한 없음)</label>
       <input type="number" id="setSetupLimit" min="0" max="30" value="5">
+      <label for="setHeadcount">반별 인원 (반 하루 한도 = 인원 × 1인 한도)</label>
+      <textarea id="setHeadcount" rows="4" spellcheck="false" placeholder="1번방 = 6&#10;2번방 = 5&#10;비우면 3_방마스터 '인원' 열, 없으면 그 반은 한도 없음"></textarea>
       <label for="setAllowB">B-2차후보 자동선택</label>
       <select id="setAllowB"><option value="1">방마스터 적합 호기가 모자랄 때만 보충</option><option value="0">사용 안 함</option></select>
       <label for="setExpand">납기 못 맞추면 호기 자동 추가</label>
