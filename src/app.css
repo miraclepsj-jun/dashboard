@@ -303,6 +303,10 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .ptable td.c1 { background: var(--confirmed); }
 .ptable td.c2 { background: repeating-linear-gradient(45deg, var(--confirmed) 0 3px, var(--weekend) 3px 6px); }
 .ptable td.c3 { background: var(--weekend); }
+.ptable td.c4 { background: #e8833a; }
+.kind { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 11px; font-weight: 700; color: #fff; }
+.kind.k-new { background: #d9711f; }
+.kind.k-cont { background: #3d7fb8; }
 .ptable td.blank { min-width: 54px; border: 1px solid var(--line); }
 .ptable tr.emptyrow td { color: var(--muted); }
 @media print {
@@ -315,6 +319,8 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   .ptable { font-size: 9.5px; }
   .ptable td, .ptable th { padding: 2px 4px; border: 1px solid #999; }
   .ptable td.c1 { background: #5a7fa6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .ptable td.c4 { background: #e8833a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .kind { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .ptable td.c2, .ptable td.c3, .ptable th.pd.off { background: #ddd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 .grid td.mlist { min-width: 180px; max-width: 260px; font-family: var(--mono); font-size: 12px; }

@@ -800,23 +800,25 @@
     const out = printData();
     const head = out.days.map((x) => '<th class="pd' + (x.work ? '' : ' off') + '" title="' + esc(x.label) + '">' + E.fmtMD(x.d).split('/')[1] + '</th>').join('');
     const cells = (mini) => mini.map((v) => '<td class="pc c' + v + '"></td>').join('');
+    // v738 fix20: 기준일 신규 시작(주황) / 계속 가공(파랑)
+    const kindTag = (k) => (k ? '<span class="kind ' + (k === '신규' ? 'k-new' : 'k-cont') + '">' + k + '</span>' : '');
     const orders = out.orders
-      .map((r) => '<tr><td class="num">' + esc(r.machine) + '</td><td class="code">' + esc(r.partCode) + '</td><td class="code">' + esc(r.planNo || '') + '</td><td>' + esc(r.source) + '</td><td class="num">' + nf(r.qty) + '</td><td class="num">' + nf(r.actual) + '</td><td class="num">' + nf(r.remain) + '</td><td class="when">' + E.fmtMD(r.start) + '~' + E.fmtMD(r.end) + '</td><td class="num"><b>' + nf(r.today) + '</b></td><td class="blank"></td><td class="blank"></td>' + cells(r.mini) + '</tr>')
+      .map((r) => '<tr><td class="num">' + esc(r.machine) + '</td><td class="code">' + esc(r.partCode) + '</td><td class="code">' + esc(r.planNo || '') + '</td><td>' + esc(r.source) + '</td><td>' + kindTag(r.startKind) + '</td><td class="num">' + nf(r.qty) + '</td><td class="num">' + nf(r.actual) + '</td><td class="num">' + nf(r.remain) + '</td><td class="when">' + E.fmtMD(r.start) + '~' + E.fmtMD(r.end) + '</td><td class="num"><b>' + nf(r.today) + '</b></td><td class="blank"></td><td class="blank"></td>' + cells(r.mini) + '</tr>')
       .join('');
     const overdue = out.overdue.map((r) => '<tr><td class="num">' + esc(r.machine) + '</td><td class="code">' + esc(r.partCode) + '</td><td class="code">' + esc(r.planNo || '') + '</td><td class="num">' + nf(r.qty) + '</td><td class="num">' + nf(r.actual) + '</td><td class="when">' + E.fmtMD(r.start) + '~' + E.fmtMD(r.end) + '</td></tr>').join('');
     const gantt = out.gantt
-      .map((g) => '<tr' + (g.empty ? ' class="emptyrow"' : '') + '><td class="num">' + esc(g.machine) + '</td><td class="code">' + esc(g.partCode) + '</td><td class="num">' + (g.empty ? '' : nf(g.qty)) + '</td><td class="num">' + (g.empty ? '' : nf(g.actual)) + '</td><td class="when">' + (g.empty ? '' : E.fmtMD(g.start) + '~' + E.fmtMD(g.end)) + '</td>' + cells(g.mini) + '</tr>')
+      .map((g) => '<tr' + (g.empty ? ' class="emptyrow"' : '') + '><td class="num">' + esc(g.machine) + '</td><td class="code">' + esc(g.partCode) + '</td><td>' + kindTag(g.startKind) + '</td><td class="num">' + (g.empty ? '' : nf(g.qty)) + '</td><td class="num">' + (g.empty ? '' : nf(g.actual)) + '</td><td class="when">' + (g.empty ? '' : E.fmtMD(g.start) + '~' + E.fmtMD(g.end)) + '</td>' + cells(g.mini) + '</tr>')
       .join('');
     const title = esc(out.room) + ' · ' + E.fmtYMD(out.date) + ' (' + '일월화수목금토'[E.dateFromSerial(out.date).getDay()] + ')';
     $('printBody').innerHTML =
-      '<section class="sheet"><h2>일일 생산지시서 · ' + title + '</h2><p class="hint">당일 ' + nf(out.orders.length) + '건 · 금일계획은 계산값이며 반장 확인 후 지시 · ■ 가공 배정일 / 회색 휴일</p>' +
-      '<div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>부품코드</th><th>계획번호</th><th>구분</th><th class="num">배정총량</th><th class="num">누적실적</th><th class="num">잔량</th><th>가공기간</th><th class="num">금일계획</th><th>작업자</th><th>완료</th>' + head + '</tr></thead><tbody>' +
+      '<section class="sheet"><h2>일일 생산지시서 · ' + title + '</h2><p class="hint">당일 ' + nf(out.orders.length) + '건 · 금일계획은 계산값이며 반장 확인 후 지시 · <span class="kind k-new">신규</span> 직전 근무일과 다른 부품 시작(주황 칸) · <span class="kind k-cont">계속</span> 같은 호기·같은 부품 이어서 가공(파랑 칸) · 회색 휴일</p>' +
+      '<div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>부품코드</th><th>계획번호</th><th>구분</th><th>신규/계속</th><th class="num">배정총량</th><th class="num">누적실적</th><th class="num">잔량</th><th>가공기간</th><th class="num">금일계획</th><th>작업자</th><th>완료</th>' + head + '</tr></thead><tbody>' +
       (orders || '<tr><td colspan="12" class="hint">기준일에 가공하는 일정이 없습니다</td></tr>') +
       '</tbody></table></div>' +
       (out.overdue.length ? '<h3>완료일 경과 확인후보 ' + out.overdue.length + '건 (9번 실적 입력 필요)</h3><div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>부품코드</th><th>계획번호</th><th class="num">배정총량</th><th class="num">누적실적</th><th>가공기간</th></tr></thead><tbody>' + overdue + '</tbody></table></div>' : '') +
       '</section>' +
       '<section class="sheet"><h2>방별 간트 · ' + title + '부터 ' + out.span + '일</h2><p class="hint">같은 호기의 동일부품 연속가공은 한 줄 · 색은 계획 점유일이며 생산완료 표시가 아닙니다</p>' +
-      '<div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>부품코드</th><th class="num">배정총량</th><th class="num">누적실적</th><th>가공기간</th>' + head + '</tr></thead><tbody>' + gantt + '</tbody></table></div></section>';
+      '<div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>부품코드</th><th>당일</th><th class="num">배정총량</th><th class="num">누적실적</th><th>가공기간</th>' + head + '</tr></thead><tbody>' + gantt + '</tbody></table></div></section>';
   }
   function exportPrint() {
     const XLSX = window.XLSX;
@@ -1141,7 +1143,8 @@
     html +=
       '<div class="row"><label for="dwMachines">배정 호기</label><input type="text" id="dwMachines" value="' + esc(preset.join('/')) + '" placeholder="527 또는 527/528">' +
       '<label for="dwQty">수량</label><input type="number" id="dwQty" min="1" value="' + (work || '') + '">' +
-      '<label for="dwDays">장비일</label><input type="number" id="dwDays" min="1" value="' + (days || 1) + '" style="width:80px"></div>' +
+      '<label for="dwDays">장비일</label><input type="number" id="dwDays" min="1" value="' + (days || 1) + '" style="width:80px">' +
+      '<label for="dwFrom">희망 시작일</label><input type="date" id="dwFrom" title="비우면 기준게시일부터 가장 먼저 비는 날. 입력하면 그날 이후의 빈 구간에서 시작합니다 (v738 fix21 N2)"></div>' +
       '<div class="row"><button class="btn" type="button" id="dwPreview">배분 미리보기</button><button class="btn primary" type="button" id="dwApply"' + (work > 0 ? '' : ' disabled') + '>선택호기 가배정</button><span class="hint" id="dwPreviewText"></span></div>';
     if (cands.length) {
       const sel = new Set(preset);
@@ -1168,32 +1171,58 @@
     const list = drawerMachines();
     for (const cb of document.querySelectorAll('[data-pick]')) cb.checked = list.includes(cb.dataset.pick);
   }
+  /**
+   * 직접 입력한 호기 검사 + 희망 시작일 + 완료확인 필요 호기 처리 (v738 fix21).
+   * 완료확인 필요(실적 미입력) 호기는 담당자가 현장 종료를 확인하면 기존 일정과 겹치지 않는 빈 구간에 넣는다.
+   * 반환 {ms, from, release, error}
+   */
+  function drawerRequest(confirmRelease) {
+    const P = S.planner;
+    const it = P.itemByKey[S.openKey];
+    const ms = drawerMachines();
+    if (!ms.length) return { error: '호기를 선택하거나 입력하세요' };
+    const errs = P.checkMachines(it, ms, { allowDelayed: true });
+    if (errs.length) return { error: errs.join(' / ') };
+    const fromIn = $('dwFrom').value ? E.toSerial($('dwFrom').value) : null;
+    const fromErr = P.checkDesiredStart(fromIn);
+    if (fromErr) return { error: fromErr };
+    const delayed = P.delayedMachines(ms);
+    if (delayed.length && confirmRelease) {
+      const ok = window.confirm(
+        delayed.join(', ') + '호기의 기존 일정이 지났지만 실적완료가 확인되지 않았습니다 (9번 누적실적 미입력).\n\n' +
+          '현장에서 직전 작업을 종료했고 실제로 새 작업을 넣을 수 있음을 직접 확인했습니까?\n' +
+          '확인하지 않았다면 [취소]를 누르고 9번 실적이나 기존 작업현황을 확인하세요.'
+      );
+      if (!ok) return { error: '완료확인 필요 호기(' + delayed.join(', ') + ')는 현장 종료 확인 후에만 배정합니다' };
+    }
+    return { ms, from: fromIn != null ? fromIn : S.baseDate, release: delayed, delayed };
+  }
   function previewDrawer() {
     const P = S.planner;
-    const ms = drawerMachines();
     const out = $('dwPreviewText');
-    if (!ms.length) return (out.textContent = '호기를 선택하거나 입력하세요');
-    // 추천 밖 호기도 직접 배정할 수 있지만 설비마스터·재질호기제외·가공가능·완료확인은 지킨다 (v732)
-    const errs = P.checkMachines(P.itemByKey[S.openKey], ms);
-    if (errs.length) return (out.textContent = errs.join(' / '));
+    // 추천 밖 호기도 직접 배정할 수 있지만 설비마스터·재질호기제외·가공가능은 지킨다 (v732)
+    const req = drawerRequest(false);
+    if (req.error) return (out.textContent = req.error);
     const qty = Number($('dwQty').value);
     const days = Number($('dwDays').value);
-    const a = P.allocate(ms, qty, days, S.baseDate);
-    if (!a) return (out.textContent = '배정 가능한 빈 구간이 없습니다 (완료확인 필요 호기 포함 여부 확인)');
-    out.textContent = a.map((x) => x.machine + ': ' + nf(x.qty) + ' (' + E.fmtMD(x.start) + '~' + E.fmtMD(x.end) + ')').join(' / ');
+    const a = P.allocate(req.ms, qty, days, req.from, P.itemByKey[S.openKey].partCode, { release: req.release });
+    if (!a) return (out.textContent = '배정 가능한 빈 구간이 없습니다');
+    out.textContent =
+      a.map((x) => x.machine + ': ' + nf(x.qty) + ' (' + E.fmtMD(x.start) + '~' + E.fmtMD(x.end) + ')').join(' / ') +
+      (req.delayed.length ? ' · ' + req.delayed.join(', ') + '호기는 완료확인 필요 – 기존 일정과 겹치지 않는 빈 구간이며 [선택호기 가배정] 때 현장 종료 확인을 묻습니다' : '');
     return a;
   }
   function applyDrawer() {
     const P = S.planner;
     const it = P.itemByKey[S.openKey];
-    const ms = drawerMachines();
-    if (!ms.length || P.checkMachines(P.itemByKey[S.openKey], ms).length) return previewDrawer();
+    const req = drawerRequest(true);
+    if (req.error) return ($('dwPreviewText').textContent = req.error);
     const qty = Number($('dwQty').value);
     const days = Number($('dwDays').value);
-    const a = P.manualAssign(it, ms, { qty, days, from: S.baseDate });
+    const a = P.manualAssign(it, req.ms, { qty, days, from: req.from, release: req.release });
     if (!a) return toast('배정 가능한 빈 구간이 없습니다');
     saveDrafts();
-    toast(it.partCode + ' → ' + a.map((x) => x.machine).join('/') + ' 가배정');
+    toast(it.partCode + ' → ' + a.map((x) => x.machine + (x.released ? '(현장 종료 확인)' : '')).join('/') + ' 가배정' + (req.from > S.baseDate ? ' · ' + E.fmtMD(req.from) + ' 이후 시작' : ''));
     renderAll();
   }
 

@@ -486,3 +486,31 @@ test('반별 인원·1인 한도가 날짜별로 늘어나면 그날부터 한�
   // 월/일만 쓰면 두 달 넘게 지난 날짜는 다음 해
   assert.equal(E.parseSetupPlan('1번방 = 2 (1/5부터)', E.serialFromYMD(2026, 10, 26)).rooms['1번방'][0].from, E.serialFromYMD(2027, 1, 5));
 });
+
+test('수기 지정호기 (v738 fix21): 희망 시작일, 완료확인 필요 호기는 현장 확인 시 실제 빈 구간만', () => {
+  const m = Demo.build(TODAY);
+  m.holidays = [];
+  m.raw = [{ planNo: 'F1', productCode: 'PF', partCode: 'PLDB801AR-B', qty: 10000, received: 0, reqDate: TODAY + 30, material: 'SK-4', refMachines: [] }];
+  m.confirmed = [
+    // 3호기: 지난 일정 실적 미입력(완료확인 필요) + 뒤에 확정 일정
+    { planNo: 'X1', productCode: 'PX', partCode: 'PLDB802AR-B', machine: '3', start: TODAY - 6, end: TODAY - 2, qty: 5000 },
+    { planNo: 'X2', productCode: 'PX', partCode: 'PLDB803AR-B', machine: '3', start: TODAY + 4, end: TODAY + 6, qty: 5000 },
+  ];
+  const P = new E.Planner(m, { today: TODAY, calendarMode: 'calendar' });
+  const it = P.items[0];
+  assert.equal(P.timeline.status('3').delayed, true);
+  assert.deepEqual(P.checkMachines(it, ['3']), ['3호기: 완료확인 필요 (9번 실적 입력)']);
+  assert.deepEqual(P.checkMachines(it, ['3'], { allowDelayed: true }), []);
+  assert.deepEqual(P.delayedMachines(['3', '4']), ['3']);
+  assert.equal(P.allocate(['3'], 4000, 2, TODAY + 1, it.partCode), null, '확인 없이는 배정 불가');
+  const a = P.manualAssign(it, ['3'], { qty: 4000, days: 2, from: TODAY + 1, release: ['3'] });
+  assert.deepEqual([a[0].start, a[0].end, a[0].released], [TODAY + 1, TODAY + 2, true]);
+  assert.match(P.confirmRows()[0].note, /실적완료 미확인 \/ 일정충돌 없음/);
+  // 희망 시작일: 그날 이후의 빈 구간 (뒤 확정 일정과 겹치면 그 뒤로)
+  const b = P.manualAssign(it, ['4'], { qty: 2000, days: 3, from: TODAY + 10 });
+  assert.equal(b[0].start, TODAY + 10);
+  assert.equal(P.checkDesiredStart(TODAY), '희망 시작일은 오늘 이후 날짜로 입력하세요');
+  assert.equal(P.checkDesiredStart(TODAY + 3), '');
+  // 3호기는 여전히 자동배정 후보에서는 완료확인 필요
+  assert.equal(P.timeline.status('3').delayed, true);
+});
