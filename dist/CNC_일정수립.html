@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>CNC 가공일정 수립</title>
 <meta name="description" content="일정관리 프로그램 발주 붙여넣기 → 호기 자동 가배정 → 간트 검토 → 9번 확정시트/설비1~A 입력용 엑셀 내보내기">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<!-- 사내망·오프라인 전용: 이 파일은 어떤 서버와도 통신하지 않는다 (아래 정책이 브라우저의 외부 요청을 모두 막음) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <style>:root {
   --bg: #eef2f5;
   --surface: #ffffff;
@@ -31,8 +31,9 @@
   --weekend: #f1f4f7;
   --today: #1f5f8b;
   --shadow: 0 10px 30px rgba(22, 32, 42, 0.18);
-  --font: 'IBM Plex Sans KR', 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', system-ui, sans-serif;
-  --mono: 'IBM Plex Mono', Consolas, 'D2Coding', ui-monospace, monospace;
+  /* 사내 PC 기본 글꼴만 사용 (외부 웹폰트 없음) */
+  --font: 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', 'Noto Sans KR', system-ui, sans-serif;
+  --mono: Consolas, 'D2Coding', 'Malgun Gothic', ui-monospace, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
@@ -349,7 +350,7 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
     <div class="actions">
       <label class="btn" for="fileInput">엑셀 불러오기</label>
       <input type="file" id="fileInput" accept=".xlsm,.xlsx,.xls" hidden>
-      <button class="btn" id="btnPaste" type="button">원본 붙여넣기</button>
+      <button class="btn" id="btnPaste" type="button">시트 붙여넣기</button>
       <button class="btn" id="btnSettings" type="button">기준 설정</button>
       <button class="btn primary" id="btnAuto" type="button">자동 일정수립</button>
       <button class="btn" id="btnExport" type="button">결과 엑셀 내보내기</button>
@@ -464,14 +465,18 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 
 <dialog id="dlgPaste" class="dialog">
   <form method="dialog" id="pasteForm">
-    <h2>일정관리 프로그램 원본 붙여넣기</h2>
+    <h2>엑셀 시트 붙여넣기 (원본·9번·마스터)</h2>
+    <p class="hint" id="pasteStatus"></p>
+    <div class="row"><label for="pasteSheet">붙여넣을 시트</label><select id="pasteSheet"><option value="auto">자동 판정 (머리행으로)</option><option value="raw">1_원본붙여넣기 (일정관리 프로그램 발주)</option><option value="confirmed">9_설비배정_확정</option><option value="rooms">3_방마스터</option><option value="machines">4_설비마스터</option><option value="rules">5_생산성분류</option><option value="productivity">6_생산성기준</option><option value="workers">13_작업자운영마스터</option><option value="bgRules">16_BG전용기준</option><option value="bdSpecs">21_BD규격마스터</option><option value="holidays">23_휴일마스터</option><option value="matExclusions">28_재질호기제외</option></select></div>
     <p class="hint">일정관리 프로그램에서 발주 목록을 <b>헤더 행 포함</b>으로 복사해 아래에 붙여넣으세요. 계획번호·제품코드·부품코드·발주량·요청일·재질 열을 헤더 이름으로 찾습니다. 헤더가 없으면 기존 1_원본붙여넣기 열 위치(E/G/H/I/L/AS)를 사용합니다.</p>
-    <p class="hint"><b>최신 전체 수주 자료를 통째로 교체</b>합니다 (신규분만 추가하지 않음, v738 fix20 운영 기준). 9번 확정과 담당자가 고친 가배정은 그대로 유지되고, 같은 행을 겹쳐 붙여넣어도 한 번만 셉니다.</p>
+    <p class="hint">보안 프로그램 때문에 엑셀 파일을 브라우저에서 직접 열 수 없을 때: 엑셀에서 시트를 열고 <b>Ctrl+A → Ctrl+C</b> 후 여기에 <b>Ctrl+V</b>. 붙여넣은 시트는 그 시트만 교체하고, 이 PC 브라우저에 저장됩니다(외부 전송 없음). 날짜 열은 연도가 보이는 서식(yyyy-mm-dd)이면 가장 정확합니다.</p>
+    <p class="hint">1_원본은 <b>최신 전체 수주 자료를 통째로 교체</b>합니다 (신규분만 추가하지 않음, v738 fix20 운영 기준). 9번 확정과 담당자가 고친 가배정은 그대로 유지되고, 같은 행을 겹쳐 붙여넣어도 한 번만 셉니다.</p>
     <textarea id="pasteText" rows="12" spellcheck="false" placeholder="여기에 Ctrl+V"></textarea>
     <p class="hint" id="pastePreview"></p>
     <div class="dialog-actions">
       <button class="btn" value="cancel" type="submit">닫기</button>
-      <button class="btn primary" id="pasteApply" type="button">원본 교체</button>
+      <button class="btn small danger" id="pasteClear" type="button">이 PC 저장 지우기</button>
+      <button class="btn primary" id="pasteApply" type="button">이 시트 반영</button>
     </div>
   </form>
 </dialog>
@@ -611,17 +616,32 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const n = Number(s);
       return n > 20000 && n < 2958466 ? Math.floor(n) : null;
     }
-    s = s.replace(/월/g, '/').replace(/일/g, '').replace(/[.\-]/g, '/').replace(/\s+/g, '');
+    const dash = /^\d{1,2}-\d{1,2}-\d{1,2}$/.test(s);
+    s = s.replace(/년/g, '/').replace(/월/g, '/').replace(/일/g, '').replace(/[.\-]/g, '/').replace(/\s+/g, '');
     const parts = s.split('/').filter((x) => x !== '');
+    if (!parts.every((x) => /^\d+$/.test(x))) return null;
     let y, m, d;
     if (parts.length === 2) {
-      y = refYear || new Date().getFullYear();
       m = parseInt(parts[0], 10);
       d = parseInt(parts[1], 10);
+      if (!(m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null;
+      if (refYear) return serialFromYMD(refYear, m, d);
+      // 연도 없는 날짜(엑셀 "m/d", "mm월 dd일" 서식을 복사한 값): 오늘에서 가장 가까운 해
+      const t = todaySerial();
+      const cy = new Date().getFullYear();
+      let best = null;
+      for (const yy of [cy - 1, cy, cy + 1]) {
+        const v = serialFromYMD(yy, m, d);
+        if (best == null || Math.abs(v - t) < Math.abs(best - t)) best = v;
+      }
+      return best;
     } else if (parts.length === 3) {
-      y = parseInt(parts[0], 10);
-      m = parseInt(parts[1], 10);
-      d = parseInt(parts[2], 10);
+      const [a, b, c] = parts.map((x) => parseInt(x, 10));
+      if (parts[0].length === 4) [y, m, d] = [a, b, c];
+      else if (parts[2].length === 4) [m, d, y] = [a, b, c]; // m/d/yyyy
+      else if (a > 12) [y, m, d] = [a, b, c]; // yy/m/d
+      else if (b > 12 || !dash) [m, d, y] = [a, b, c]; // 엑셀 기본 m/d/yy
+      else [y, m, d] = [a, b, c]; // yy-mm-dd
       if (y < 100) y += 2000;
     } else return null;
     if (!(y >= 1900 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null;
@@ -2893,6 +2913,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         eqBad.push(str(v));
         continue;
       }
+      // 날짜 서식이 걸린 칸을 복사하면 "05월 10일"·"5/10"처럼 보이므로 호기로 쓰지 않는다 (엑셀에서 열 서식을 '일반'으로)
+      if (typeof v === 'string' && /\d\s*(월|\/|-)\s*\d/.test(v)) {
+        eqBad.push(str(v));
+        continue;
+      }
       const no = E.machineNo(v);
       if (!/^\d+$/.test(no) || Number(no) <= 0 || Number(no) > 9999) eqBad.push(str(v));
       else if (!refMachines.includes(no)) refMachines.push(no);
@@ -2900,12 +2925,62 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return eqBad.length ? { refMachines, eqBad } : { refMachines };
   }
 
+  /**
+   * 엑셀에서 복사한 클립보드 텍스트(TSV) → 2차원 배열.
+   * 셀 안에 줄바꿈·탭·따옴표가 있으면 엑셀이 "..."로 감싸므로 따옴표 규칙대로 읽는다 (예: 헤더 "특별(납기)⏎관리 여부").
+   */
+  function parseTSV(text) {
+    const t = String(text || '').replace(/\r\n?/g, '\n');
+    const rows = [];
+    let row = [];
+    let cell = '';
+    let i = 0;
+    let quoted = false;
+    const push = () => {
+      row.push(cell === '' ? null : cell);
+      cell = '';
+    };
+    while (i < t.length) {
+      const ch = t[i];
+      if (quoted) {
+        if (ch === '"' && t[i + 1] === '"') {
+          cell += '"';
+          i += 2;
+          continue;
+        }
+        if (ch === '"') {
+          quoted = false;
+          i++;
+          continue;
+        }
+        cell += ch;
+        i++;
+        continue;
+      }
+      if (ch === '"' && cell === '') {
+        quoted = true;
+        i++;
+        continue;
+      }
+      if (ch === '\t') push();
+      else if (ch === '\n') {
+        push();
+        rows.push(row.every((v) => v == null) ? [] : row);
+        row = [];
+      } else cell += ch;
+      i++;
+    }
+    if (cell !== '' || row.length) {
+      push();
+      rows.push(row);
+    }
+    return rows;
+  }
+
   /** 클립보드 붙여넣기 텍스트(TSV) → 원본 행. */
   function parsePastedText(text) {
-    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
-    const rows = lines.map((l) => (l === '' ? [] : l.split('\t').map((v) => (v === '' ? null : v))));
     // 엑셀에서 복사한 "1,234" 형태 숫자 정리는 toNum이 처리
-    return parseRawRows(rows);
+    return parseRawRows(parseTSV(text));
   }
 
   // ───────────── 마스터 ─────────────
@@ -3092,6 +3167,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   const CONFIRM_HEADERS = ['계획번호', '제품코드', '부품코드', '배정호기', '시작일', '완료일', '수량', '신규세팅여부', '담당작업자', '세팅가능확인', '간트표시', '비고', '검토결과', '최근실적일', '누적실적', '실적확인', '실적비고'];
 
+  /** 연도 없이 복사한 완료일이 시작일보다 반년 넘게 앞서면 다음 해 (예: 12/28 ~ 1/5) */
+  function endAfter(start, end) {
+    if (start == null || end == null || start - end < 180) return end;
+    const d = E.dateFromSerial(end);
+    return E.serialFromYMD(d.getFullYear() + 1, d.getMonth() + 1, d.getDate());
+  }
+
   function readConfirmed(rows) {
     const hm = headerMap(rows, '배정호기');
     if (!hm) return [];
@@ -3124,7 +3206,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         partCode: str(at(row, c.partCode)),
         machine: E.machineNo(at(row, c.machine)),
         start,
-        end: toSerial(at(row, c.end)),
+        end: endAfter(start, toSerial(at(row, c.end))),
         qty: toNum(at(row, c.qty)),
         newSetup: str(at(row, c.newSetup)),
         worker: str(at(row, c.worker)),
@@ -3140,13 +3222,58 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
 
   /** 통합문서 → 엔진 모델. 누락 시트는 warnings에 기록. */
+  const READERS = () => ({ raw: parseRawRows, rooms: readRooms, machines: readMachines, rules: readRules, productivity: readProductivity, workers: readWorkers, bgRules: readBGRules, bdSpecs: readBDSpecs, confirmed: readConfirmed, holidays: readHolidays, matExclusions: readMatExclusions });
+
+  /** 시트별 붙여넣기 대상 (보안 프로그램 때문에 엑셀 파일을 직접 못 읽을 때 시트를 복사해 붙여넣는다) */
+  const PASTE_SHEETS = [
+    ['raw', '1_원본붙여넣기'],
+    ['confirmed', '9_설비배정_확정'],
+    ['rooms', '3_방마스터'],
+    ['machines', '4_설비마스터'],
+    ['rules', '5_생산성분류'],
+    ['productivity', '6_생산성기준'],
+    ['workers', '13_작업자운영마스터'],
+    ['bgRules', '16_BG전용기준'],
+    ['bdSpecs', '21_BD규격마스터'],
+    ['holidays', '23_휴일마스터'],
+    ['matExclusions', '28_재질호기제외'],
+  ];
+  /** 붙여넣은 시트 텍스트(헤더 포함) → 해당 모델 배열 */
+  function readPastedSheet(key, text) {
+    const r = READERS()[key];
+    if (!r) throw new Error('알 수 없는 시트: ' + key);
+    // 복사한 값은 화면에 보이는 글자이므로 숫자처럼 보이는 칸("1,200", "0.6")은 숫자로 (앞자리 0 코드는 그대로)
+    const NUM = /^-?(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?$/;
+    const rows = parseTSV(text).map((row) => row.map((v) => (v != null && NUM.test(v.trim()) ? Number(v.trim().replace(/,/g, '')) : v)));
+    return r(rows);
+  }
+  /** 붙여넣은 텍스트의 머리행으로 어느 시트인지 추정 (못 찾으면 null) */
+  function guessPastedSheet(text) {
+    const head = parseTSV(String(text || '').split('\n').slice(0, 8).join('\n'))
+      .map((r) => r.map(norm).join('|'))
+      .join('\n');
+    const has = (...ks) => ks.every((k) => head.includes(k));
+    if (has('계획번호', '부품코드', '발주량')) return 'raw';
+    if (has('배정호기', '시작일', '완료일')) return 'confirmed';
+    if (has('호기', '방', '기종')) return 'machines';
+    if (has('방', '기본소재계열')) return 'rooms';
+    if (has('조건/키워드', '검색방식')) return 'rules';
+    if (has('품목군', '기준_일생산량')) return 'productivity';
+    if (has('호기', '담당작업자')) return 'workers';
+    if (has('BG최소외경')) return 'bgRules';
+    if (has('부품명', 'BD외경')) return 'bdSpecs';
+    if (has('날짜', '구분')) return 'holidays';
+    if (has('호기', '제외재질')) return 'matExclusions';
+    return null;
+  }
+
   function readWorkbook(data) {
     const XLSX = getXLSX();
     const wb = XLSX.read(data, { type: data instanceof ArrayBuffer || ArrayBuffer.isView(data) ? 'array' : 'buffer', cellDates: false, bookVBA: false });
     const model = { raw: [], rooms: [], machines: [], rules: [], productivity: [], workers: [], bgRules: [], bdSpecs: [], confirmed: [], holidays: [], matExclusions: [] };
     const warnings = [];
     const found = {};
-    const readers = { raw: parseRawRows, rooms: readRooms, machines: readMachines, rules: readRules, productivity: readProductivity, workers: readWorkers, bgRules: readBGRules, bdSpecs: readBDSpecs, confirmed: readConfirmed, holidays: readHolidays, matExclusions: readMatExclusions };
+    const readers = READERS();
     for (const [k, base] of Object.entries(SHEETS)) {
       const name = findSheet(wb, base);
       found[k] = name;
@@ -3270,7 +3397,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return (prefix || 'CNC_일정수립결과') + '_' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes()) + '.xlsx';
   }
 
-  return { SHEETS, CONFIRM_HEADERS, readWorkbook, parseRawRows, parsePastedText, buildExportWorkbook, exportFileName };
+  return { SHEETS, CONFIRM_HEADERS, PASTE_SHEETS, readWorkbook, parseRawRows, parsePastedText, parseTSV, readPastedSheet, guessPastedSheet, buildExportWorkbook, exportFileName };
 });
 </script>
 <script>/*
@@ -4266,6 +4393,48 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const nf = (n) => (n == null || n === '' ? '' : Number(n).toLocaleString('ko-KR'));
 
+  /**
+   * 불러온 기준(원본·9번·마스터)을 이 PC 브라우저에 보관 (IndexedDB, 외부로 나가지 않음).
+   * 사내망 PC에서 매일 엑셀을 다시 읽지 않고 1_원본·9번만 붙여넣어 쓰기 위해.
+   */
+  const idb = {
+    open() {
+      return new Promise((res, rej) => {
+        try {
+          const r = indexedDB.open('cnc-schedule', 1);
+          r.onupgradeneeded = () => r.result.createObjectStore('kv');
+          r.onsuccess = () => res(r.result);
+          r.onerror = () => rej(r.error);
+        } catch (e) {
+          rej(e);
+        }
+      });
+    },
+    async op(mode, fn) {
+      const db = await this.open();
+      return new Promise((res, rej) => {
+        const tx = db.transaction('kv', mode);
+        const req = fn(tx.objectStore('kv'));
+        tx.oncomplete = () => res(req && req.result);
+        tx.onerror = () => rej(tx.error);
+      });
+    },
+    get(k) {
+      return this.op('readonly', (st) => st.get(k)).catch(() => null);
+    },
+    set(k, v) {
+      return this.op('readwrite', (st) => st.put(v, k)).catch(() => null);
+    },
+    del(k) {
+      return this.op('readwrite', (st) => st.delete(k)).catch(() => null);
+    },
+  };
+  function saveModel() {
+    if (S.isDemo) return;
+    S.savedAt = Date.now();
+    idb.set('model', { model: S.model, source: S.source, pasted: S.pasted || [], savedAt: S.savedAt });
+  }
+
   const store = {
     get(k, d) {
       try {
@@ -4446,7 +4615,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     const m = S.model;
     const txt = S.isDemo
       ? '예시 데이터(가상)로 열려 있습니다 · [엑셀 불러오기]로 회사 통합문서(.xlsm)를 여세요'
-      : S.source + ' · 원본 ' + nf(m.raw.length) + '행 · 설비 ' + nf(m.machines.length) + '대 · ' + (!S.planner.transition ? '확정일정 ' + nf(m.confirmed.length) + '건' : S.planner.manualRows.length ? '최초 전환: 수기 간트 초기 이관 ' + nf(S.planner.manualRows.length) + '행' : S.planner.initial.used ? '최초 전환: 프로그램 설비1~A 초기 이관 ' + nf(S.planner.initial.rows.length) + '행' : '9번 비어 있음 · 최초 전환 전 (수기 일정·학습 탭에서 초기 이관)') + (S.planner.cal.workdays ? ' · 근무일 기준(휴일 ' + nf((m.holidays || []).length) + '일)' : ' · 달력일 기준') + ' · 기준게시일 ' + E.fmtYMD(S.baseDate);
+      : S.source + (S.savedAt ? ' (이 PC에 저장 ' + new Date(S.savedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + ')' : '') + ' · 원본 ' + nf(m.raw.length) + '행 · 설비 ' + nf(m.machines.length) + '대 · ' + (!S.planner.transition ? '확정일정 ' + nf(m.confirmed.length) + '건' : S.planner.manualRows.length ? '최초 전환: 수기 간트 초기 이관 ' + nf(S.planner.manualRows.length) + '행' : S.planner.initial.used ? '최초 전환: 프로그램 설비1~A 초기 이관 ' + nf(S.planner.initial.rows.length) + '행' : '9번 비어 있음 · 최초 전환 전 (수기 일정·학습 탭에서 초기 이관)') + (S.planner.cal.workdays ? ' · 근무일 기준(휴일 ' + nf((m.holidays || []).length) + '일)' : ' · 달력일 기준') + ' · 기준게시일 ' + E.fmtYMD(S.baseDate);
     $('sourceLine').textContent = txt;
   }
 
@@ -5079,6 +5248,23 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       '<section class="sheet"><h2>방별 간트 · ' + title + '부터 ' + out.span + '일</h2><p class="hint">같은 호기의 동일부품 연속가공은 한 줄 · 색은 계획 점유일이며 생산완료 표시가 아닙니다</p>' +
       '<div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>부품코드</th><th>당일</th><th class="num">배정총량</th><th class="num">누적실적</th><th>가공기간</th>' + head + '</tr></thead><tbody>' + gantt + '</tbody></table></div></section>';
   }
+  /** 엑셀 파일 저장: 이 PC 안에서 파일을 만들어 내려받기만 한다 (서버 전송 없음) */
+  function saveWorkbook(wb, name) {
+    const data = window.XLSX.write(wb, { bookType: 'xlsx', type: 'array', compression: true });
+    const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      a.remove();
+    }, 2000);
+  }
+
   function exportPrint() {
     const XLSX = window.XLSX;
     const out = printData();
@@ -5087,7 +5273,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.orders), '일일생산지시');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.gantt), '방별간트');
     try {
-      XLSX.writeFile(wb, '현장출력_' + out.room + '_' + E.fmtYMD(out.date) + '.xlsx');
+      saveWorkbook(wb, '현장출력_' + out.room + '_' + E.fmtYMD(out.date) + '.xlsx');
       toast('현장 출력 엑셀을 저장했습니다');
     } catch (e) {
       toast('파일 저장이 막혀 있습니다. [인쇄]를 쓰세요');
@@ -5208,7 +5394,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
                 .map((it) => esc(it.planNo + ' ' + it.partCode + ' [' + it.eqBad.join(',') + ']'))
                 .join(', ') +
               (eqBad.length > 6 ? ' 외' : '') +
-              '</li>'
+              ' (복사해 붙여넣은 경우 1_원본 설비1~A 열 서식이 날짜면 "05월 10일"처럼 들어옵니다. 열 서식을 "일반"으로 바꾸고 다시 복사하세요)</li>'
             : '') +
           '</ul></div>'
       );
@@ -5499,10 +5685,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     });
   }
 
-  function loadModel(model, source, isDemo) {
+  function loadModel(model, source, isDemo, meta) {
     S.model = model;
     S.source = source;
     S.isDemo = isDemo;
+    S.pasted = (meta && meta.pasted) || [];
+    S.savedAt = meta && meta.savedAt;
     S.planner = null;
     S.openKey = null;
     // 같은 파일 이름이면 이전에 반영한 수기 일정 이관을 이어서 쓴다
@@ -5534,6 +5722,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           return;
         }
         const restored = loadModel(model, file.name, false);
+        saveModel();
+        renderSource();
         toast(file.name + ' 불러옴 · 품목 ' + nf(model.raw.length) + '행' + (restored ? ' · 이전 가배정 ' + restored + '건 복원' : '') + (warnings.length ? ' · ' + warnings.join(' / ') : ''));
       });
     };
@@ -5581,7 +5771,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     if (!S.planner.drafts.length && !S.planner.initialRows().length) return toast('가배정이 없습니다. [자동 일정수립]을 먼저 실행하세요');
     const wb = W.buildExportWorkbook(S.planner, {});
     try {
-      window.XLSX.writeFile(wb, W.exportFileName());
+      saveWorkbook(wb, W.exportFileName());
       toast('결과 엑셀을 저장했습니다');
     } catch (e) {
       toast('파일 저장이 막혀 있습니다. 아래 [복사] 버튼으로 붙여넣으세요');
@@ -5678,22 +5868,72 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     });
   }
 
+  const EMPTY_MODEL = () => ({ raw: [], rooms: [], machines: [], rules: [], productivity: [], workers: [], bgRules: [], bdSpecs: [], confirmed: [], holidays: [], matExclusions: [] });
+  const sheetLabel = (k) => (W.PASTE_SHEETS.find((x) => x[0] === k) || [k, k])[1];
+  /** 붙여넣은 텍스트 → {key, rows}. 대상 시트를 '자동'으로 두면 머리행으로 판정 */
+  function pasteTarget() {
+    const text = $('pasteText').value;
+    const sel = $('pasteSheet').value;
+    const key = sel === 'auto' ? W.guessPastedSheet(text) : sel;
+    if (!key) return { key: null, rows: [] };
+    let rows = [];
+    try {
+      rows = W.readPastedSheet(key, text);
+    } catch (e) {
+      rows = [];
+    }
+    return { key, rows };
+  }
   function pastePreview() {
-    const rows = W.parsePastedText($('pasteText').value);
-    $('pastePreview').textContent = rows.length ? '인식된 품목 ' + nf(rows.length) + '행 · 예: ' + rows.slice(0, 2).map((r) => (r.planNo || '-') + ' ' + r.partCode + ' ' + nf(r.qty)).join(', ') : '인식된 품목이 없습니다';
-    return rows;
+    const { key, rows } = pasteTarget();
+    const ex = (r) =>
+      key === 'raw'
+        ? (r.planNo || '-') + ' ' + r.partCode + ' ' + nf(r.qty)
+        : key === 'confirmed'
+        ? r.planNo + ' ' + r.partCode + ' ' + r.machine + '호기 ' + (r.start != null ? E.fmtMD(r.start) : '?') + '~' + (r.end != null ? E.fmtMD(r.end) : '?')
+        : key === 'machines'
+        ? r.no + '호기 ' + (r.room || '')
+        : JSON.stringify(r).slice(0, 40);
+    $('pastePreview').textContent = !key
+      ? '어느 시트인지 알 수 없습니다. 머리행(헤더)까지 복사했는지 확인하거나 위에서 시트를 고르세요'
+      : rows.length
+      ? sheetLabel(key) + ' ' + nf(rows.length) + '행 인식 · 예: ' + rows.slice(0, 2).map(ex).join(', ')
+      : sheetLabel(key) + ': 인식된 행이 없습니다 (머리행 포함 여부 확인)';
+    return { key, rows };
   }
   function applyPaste() {
-    const rows = pastePreview();
-    if (!rows.length) return;
+    const { key, rows } = pastePreview();
+    if (!key || !rows.length) return;
     $('dlgPaste').close();
-    busy('원본 교체 중…', () => {
-      S.model = Object.assign({}, S.model, { raw: rows });
-      rebuild('all');
+    $('pasteText').value = '';
+    busy(sheetLabel(key) + ' 반영 중…', () => {
+      // 예시 데이터 위에 회사 마스터를 섞지 않는다: 예시 상태에서 마스터·9번을 붙여넣으면 빈 기준에서 시작
+      const fromDemo = S.isDemo && key !== 'raw';
+      const base = fromDemo ? EMPTY_MODEL() : S.model;
+      const model = Object.assign({}, base, { [key]: rows });
+      const pasted = (fromDemo ? [] : (S.pasted || []).filter((k) => k !== key)).concat(key);
+      if (fromDemo) loadModel(model, '붙여넣기 기준', false, { pasted });
+      else {
+        S.model = model;
+        if (!S.isDemo) S.pasted = pasted;
+        rebuild('all');
+      }
+      saveModel();
       S.page = 0;
       renderAll();
-      toast('원본 ' + nf(rows.length) + '행으로 교체했습니다. [자동 일정수립]을 실행하세요');
+      const need = ['rooms', 'machines', 'rules', 'productivity'].filter((k) => !(S.model[k] || []).length);
+      toast(
+        sheetLabel(key) + ' ' + nf(rows.length) + '행 반영' +
+          (S.isDemo ? ' (예시 기준 위 – 회사 마스터를 먼저 붙여넣거나 엑셀을 불러오세요)' : need.length ? ' · 아직 필요한 시트: ' + need.map(sheetLabel).join(', ') : key === 'raw' ? ' · [자동 일정수립]을 실행하세요' : '')
+      );
     });
+  }
+  async function clearSaved() {
+    if (!window.confirm('이 PC 브라우저에 저장한 기준(원본·9번·마스터)을 지우고 예시 데이터로 돌아갈까요? 엑셀 파일은 그대로입니다.')) return;
+    await idb.del('model');
+    $('dlgPaste').close();
+    loadModel(window.CNCDemo.build(today), '예시 데이터', true);
+    toast('저장한 기준을 지웠습니다');
   }
 
   // ───────────────────────── 이벤트 ─────────────────────────
@@ -5721,10 +5961,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     $('settingsApply').onclick = applySettings;
     $('btnPaste').onclick = () => {
       $('pastePreview').textContent = '';
+      $('pasteStatus').innerHTML = pasteStatusHtml();
       $('dlgPaste').showModal();
     };
     $('pasteText').addEventListener('input', pastePreview);
+    $('pasteSheet').addEventListener('change', pastePreview);
     $('pasteApply').onclick = applyPaste;
+    $('pasteClear').onclick = clearSaved;
 
     for (const b of document.querySelectorAll('.tab'))
       b.addEventListener('click', () => {
@@ -5870,13 +6113,31 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     });
   }
 
+  /** 붙여넣기 창의 현재 기준 상태 (어떤 시트가 들어와 있는지) */
+  function pasteStatusHtml() {
+    if (S.isDemo) return '지금은 <b>예시 데이터</b>입니다. 회사 기준을 처음 넣을 때: 엑셀에서 3·4·5·6·9·13·23번 등 시트를 하나씩 전체 선택(Ctrl+A) → 복사(Ctrl+C) → 여기에 붙여넣기. 한 번 넣으면 이 PC에 저장되어 다음부터는 1_원본·9번만 바꾸면 됩니다.';
+    return (
+      '현재 기준: <b>' + esc(S.source) + '</b> · ' +
+      W.PASTE_SHEETS.map(([k, label]) => '<span class="' + ((S.model[k] || []).length ? '' : 'late-text') + '">' + esc(label.split('_')[0]) + ' ' + nf((S.model[k] || []).length) + '</span>').join(' · ')
+    );
+  }
+
   // ───────────────────────── 시작 ─────────────────────────
   bind();
-  loadModel(window.CNCDemo.build(today), '예시 데이터', true);
-  if (!S.planner.drafts.length) {
-    S.planner.autoPlan();
-    renderAll();
+  function startDemo() {
+    loadModel(window.CNCDemo.build(today), '예시 데이터', true);
+    if (!S.planner.drafts.length) {
+      S.planner.autoPlan();
+      renderAll();
+    }
   }
+  // 이 PC에 저장한 기준이 있으면 그것으로 시작 (없거나 브라우저가 막으면 예시 데이터)
+  Promise.race([idb.get('model'), new Promise((r) => setTimeout(() => r(null), 1500))]).then((saved) => {
+    if (saved && saved.model && (saved.model.machines || []).length) {
+      const restored = loadModel(saved.model, saved.source, false, saved);
+      toast('이 PC에 저장한 기준으로 시작했습니다 (' + saved.source + ')' + (restored ? ' · 가배정 ' + restored + '건 복원' : ''));
+    } else startDemo();
+  });
 })();
 </script>
 

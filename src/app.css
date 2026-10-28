@@ -22,8 +22,9 @@
   --weekend: #f1f4f7;
   --today: #1f5f8b;
   --shadow: 0 10px 30px rgba(22, 32, 42, 0.18);
-  --font: 'IBM Plex Sans KR', 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', system-ui, sans-serif;
-  --mono: 'IBM Plex Mono', Consolas, 'D2Coding', ui-monospace, monospace;
+  /* 사내 PC 기본 글꼴만 사용 (외부 웹폰트 없음) */
+  --font: 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', 'Noto Sans KR', system-ui, sans-serif;
+  --mono: Consolas, 'D2Coding', 'Malgun Gothic', ui-monospace, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {

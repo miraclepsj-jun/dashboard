@@ -54,17 +54,32 @@
       const n = Number(s);
       return n > 20000 && n < 2958466 ? Math.floor(n) : null;
     }
-    s = s.replace(/월/g, '/').replace(/일/g, '').replace(/[.\-]/g, '/').replace(/\s+/g, '');
+    const dash = /^\d{1,2}-\d{1,2}-\d{1,2}$/.test(s);
+    s = s.replace(/년/g, '/').replace(/월/g, '/').replace(/일/g, '').replace(/[.\-]/g, '/').replace(/\s+/g, '');
     const parts = s.split('/').filter((x) => x !== '');
+    if (!parts.every((x) => /^\d+$/.test(x))) return null;
     let y, m, d;
     if (parts.length === 2) {
-      y = refYear || new Date().getFullYear();
       m = parseInt(parts[0], 10);
       d = parseInt(parts[1], 10);
+      if (!(m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null;
+      if (refYear) return serialFromYMD(refYear, m, d);
+      // 연도 없는 날짜(엑셀 "m/d", "mm월 dd일" 서식을 복사한 값): 오늘에서 가장 가까운 해
+      const t = todaySerial();
+      const cy = new Date().getFullYear();
+      let best = null;
+      for (const yy of [cy - 1, cy, cy + 1]) {
+        const v = serialFromYMD(yy, m, d);
+        if (best == null || Math.abs(v - t) < Math.abs(best - t)) best = v;
+      }
+      return best;
     } else if (parts.length === 3) {
-      y = parseInt(parts[0], 10);
-      m = parseInt(parts[1], 10);
-      d = parseInt(parts[2], 10);
+      const [a, b, c] = parts.map((x) => parseInt(x, 10));
+      if (parts[0].length === 4) [y, m, d] = [a, b, c];
+      else if (parts[2].length === 4) [m, d, y] = [a, b, c]; // m/d/yyyy
+      else if (a > 12) [y, m, d] = [a, b, c]; // yy/m/d
+      else if (b > 12 || !dash) [m, d, y] = [a, b, c]; // 엑셀 기본 m/d/yy
+      else [y, m, d] = [a, b, c]; // yy-mm-dd
       if (y < 100) y += 2000;
     } else return null;
     if (!(y >= 1900 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null;

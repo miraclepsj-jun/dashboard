@@ -7,6 +7,48 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const nf = (n) => (n == null || n === '' ? '' : Number(n).toLocaleString('ko-KR'));
 
+  /**
+   * 불러온 기준(원본·9번·마스터)을 이 PC 브라우저에 보관 (IndexedDB, 외부로 나가지 않음).
+   * 사내망 PC에서 매일 엑셀을 다시 읽지 않고 1_원본·9번만 붙여넣어 쓰기 위해.
+   */
+  const idb = {
+    open() {
+      return new Promise((res, rej) => {
+        try {
+          const r = indexedDB.open('cnc-schedule', 1);
+          r.onupgradeneeded = () => r.result.createObjectStore('kv');
+          r.onsuccess = () => res(r.result);
+          r.onerror = () => rej(r.error);
+        } catch (e) {
+          rej(e);
+        }
+      });
+    },
+    async op(mode, fn) {
+      const db = await this.open();
+      return new Promise((res, rej) => {
+        const tx = db.transaction('kv', mode);
+        const req = fn(tx.objectStore('kv'));
+        tx.oncomplete = () => res(req && req.result);
+        tx.onerror = () => rej(tx.error);
+      });
+    },
+    get(k) {
+      return this.op('readonly', (st) => st.get(k)).catch(() => null);
+    },
+    set(k, v) {
+      return this.op('readwrite', (st) => st.put(v, k)).catch(() => null);
+    },
+    del(k) {
+      return this.op('readwrite', (st) => st.delete(k)).catch(() => null);
+    },
+  };
+  function saveModel() {
+    if (S.isDemo) return;
+    S.savedAt = Date.now();
+    idb.set('model', { model: S.model, source: S.source, pasted: S.pasted || [], savedAt: S.savedAt });
+  }
+
   const store = {
     get(k, d) {
       try {
@@ -187,7 +229,7 @@
     const m = S.model;
     const txt = S.isDemo
       ? '예시 데이터(가상)로 열려 있습니다 · [엑셀 불러오기]로 회사 통합문서(.xlsm)를 여세요'
-      : S.source + ' · 원본 ' + nf(m.raw.length) + '행 · 설비 ' + nf(m.machines.length) + '대 · ' + (!S.planner.transition ? '확정일정 ' + nf(m.confirmed.length) + '건' : S.planner.manualRows.length ? '최초 전환: 수기 간트 초기 이관 ' + nf(S.planner.manualRows.length) + '행' : S.planner.initial.used ? '최초 전환: 프로그램 설비1~A 초기 이관 ' + nf(S.planner.initial.rows.length) + '행' : '9번 비어 있음 · 최초 전환 전 (수기 일정·학습 탭에서 초기 이관)') + (S.planner.cal.workdays ? ' · 근무일 기준(휴일 ' + nf((m.holidays || []).length) + '일)' : ' · 달력일 기준') + ' · 기준게시일 ' + E.fmtYMD(S.baseDate);
+      : S.source + (S.savedAt ? ' (이 PC에 저장 ' + new Date(S.savedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + ')' : '') + ' · 원본 ' + nf(m.raw.length) + '행 · 설비 ' + nf(m.machines.length) + '대 · ' + (!S.planner.transition ? '확정일정 ' + nf(m.confirmed.length) + '건' : S.planner.manualRows.length ? '최초 전환: 수기 간트 초기 이관 ' + nf(S.planner.manualRows.length) + '행' : S.planner.initial.used ? '최초 전환: 프로그램 설비1~A 초기 이관 ' + nf(S.planner.initial.rows.length) + '행' : '9번 비어 있음 · 최초 전환 전 (수기 일정·학습 탭에서 초기 이관)') + (S.planner.cal.workdays ? ' · 근무일 기준(휴일 ' + nf((m.holidays || []).length) + '일)' : ' · 달력일 기준') + ' · 기준게시일 ' + E.fmtYMD(S.baseDate);
     $('sourceLine').textContent = txt;
   }
 
@@ -820,6 +862,23 @@
       '<section class="sheet"><h2>방별 간트 · ' + title + '부터 ' + out.span + '일</h2><p class="hint">같은 호기의 동일부품 연속가공은 한 줄 · 색은 계획 점유일이며 생산완료 표시가 아닙니다</p>' +
       '<div class="table-wrap"><table class="grid ptable"><thead><tr><th>호기</th><th>부품코드</th><th>당일</th><th class="num">배정총량</th><th class="num">누적실적</th><th>가공기간</th>' + head + '</tr></thead><tbody>' + gantt + '</tbody></table></div></section>';
   }
+  /** 엑셀 파일 저장: 이 PC 안에서 파일을 만들어 내려받기만 한다 (서버 전송 없음) */
+  function saveWorkbook(wb, name) {
+    const data = window.XLSX.write(wb, { bookType: 'xlsx', type: 'array', compression: true });
+    const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      a.remove();
+    }, 2000);
+  }
+
   function exportPrint() {
     const XLSX = window.XLSX;
     const out = printData();
@@ -828,7 +887,7 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.orders), '일일생산지시');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.gantt), '방별간트');
     try {
-      XLSX.writeFile(wb, '현장출력_' + out.room + '_' + E.fmtYMD(out.date) + '.xlsx');
+      saveWorkbook(wb, '현장출력_' + out.room + '_' + E.fmtYMD(out.date) + '.xlsx');
       toast('현장 출력 엑셀을 저장했습니다');
     } catch (e) {
       toast('파일 저장이 막혀 있습니다. [인쇄]를 쓰세요');
@@ -949,7 +1008,7 @@
                 .map((it) => esc(it.planNo + ' ' + it.partCode + ' [' + it.eqBad.join(',') + ']'))
                 .join(', ') +
               (eqBad.length > 6 ? ' 외' : '') +
-              '</li>'
+              ' (복사해 붙여넣은 경우 1_원본 설비1~A 열 서식이 날짜면 "05월 10일"처럼 들어옵니다. 열 서식을 "일반"으로 바꾸고 다시 복사하세요)</li>'
             : '') +
           '</ul></div>'
       );
@@ -1240,10 +1299,12 @@
     });
   }
 
-  function loadModel(model, source, isDemo) {
+  function loadModel(model, source, isDemo, meta) {
     S.model = model;
     S.source = source;
     S.isDemo = isDemo;
+    S.pasted = (meta && meta.pasted) || [];
+    S.savedAt = meta && meta.savedAt;
     S.planner = null;
     S.openKey = null;
     // 같은 파일 이름이면 이전에 반영한 수기 일정 이관을 이어서 쓴다
@@ -1275,6 +1336,8 @@
           return;
         }
         const restored = loadModel(model, file.name, false);
+        saveModel();
+        renderSource();
         toast(file.name + ' 불러옴 · 품목 ' + nf(model.raw.length) + '행' + (restored ? ' · 이전 가배정 ' + restored + '건 복원' : '') + (warnings.length ? ' · ' + warnings.join(' / ') : ''));
       });
     };
@@ -1322,7 +1385,7 @@
     if (!S.planner.drafts.length && !S.planner.initialRows().length) return toast('가배정이 없습니다. [자동 일정수립]을 먼저 실행하세요');
     const wb = W.buildExportWorkbook(S.planner, {});
     try {
-      window.XLSX.writeFile(wb, W.exportFileName());
+      saveWorkbook(wb, W.exportFileName());
       toast('결과 엑셀을 저장했습니다');
     } catch (e) {
       toast('파일 저장이 막혀 있습니다. 아래 [복사] 버튼으로 붙여넣으세요');
@@ -1419,22 +1482,72 @@
     });
   }
 
+  const EMPTY_MODEL = () => ({ raw: [], rooms: [], machines: [], rules: [], productivity: [], workers: [], bgRules: [], bdSpecs: [], confirmed: [], holidays: [], matExclusions: [] });
+  const sheetLabel = (k) => (W.PASTE_SHEETS.find((x) => x[0] === k) || [k, k])[1];
+  /** 붙여넣은 텍스트 → {key, rows}. 대상 시트를 '자동'으로 두면 머리행으로 판정 */
+  function pasteTarget() {
+    const text = $('pasteText').value;
+    const sel = $('pasteSheet').value;
+    const key = sel === 'auto' ? W.guessPastedSheet(text) : sel;
+    if (!key) return { key: null, rows: [] };
+    let rows = [];
+    try {
+      rows = W.readPastedSheet(key, text);
+    } catch (e) {
+      rows = [];
+    }
+    return { key, rows };
+  }
   function pastePreview() {
-    const rows = W.parsePastedText($('pasteText').value);
-    $('pastePreview').textContent = rows.length ? '인식된 품목 ' + nf(rows.length) + '행 · 예: ' + rows.slice(0, 2).map((r) => (r.planNo || '-') + ' ' + r.partCode + ' ' + nf(r.qty)).join(', ') : '인식된 품목이 없습니다';
-    return rows;
+    const { key, rows } = pasteTarget();
+    const ex = (r) =>
+      key === 'raw'
+        ? (r.planNo || '-') + ' ' + r.partCode + ' ' + nf(r.qty)
+        : key === 'confirmed'
+        ? r.planNo + ' ' + r.partCode + ' ' + r.machine + '호기 ' + (r.start != null ? E.fmtMD(r.start) : '?') + '~' + (r.end != null ? E.fmtMD(r.end) : '?')
+        : key === 'machines'
+        ? r.no + '호기 ' + (r.room || '')
+        : JSON.stringify(r).slice(0, 40);
+    $('pastePreview').textContent = !key
+      ? '어느 시트인지 알 수 없습니다. 머리행(헤더)까지 복사했는지 확인하거나 위에서 시트를 고르세요'
+      : rows.length
+      ? sheetLabel(key) + ' ' + nf(rows.length) + '행 인식 · 예: ' + rows.slice(0, 2).map(ex).join(', ')
+      : sheetLabel(key) + ': 인식된 행이 없습니다 (머리행 포함 여부 확인)';
+    return { key, rows };
   }
   function applyPaste() {
-    const rows = pastePreview();
-    if (!rows.length) return;
+    const { key, rows } = pastePreview();
+    if (!key || !rows.length) return;
     $('dlgPaste').close();
-    busy('원본 교체 중…', () => {
-      S.model = Object.assign({}, S.model, { raw: rows });
-      rebuild('all');
+    $('pasteText').value = '';
+    busy(sheetLabel(key) + ' 반영 중…', () => {
+      // 예시 데이터 위에 회사 마스터를 섞지 않는다: 예시 상태에서 마스터·9번을 붙여넣으면 빈 기준에서 시작
+      const fromDemo = S.isDemo && key !== 'raw';
+      const base = fromDemo ? EMPTY_MODEL() : S.model;
+      const model = Object.assign({}, base, { [key]: rows });
+      const pasted = (fromDemo ? [] : (S.pasted || []).filter((k) => k !== key)).concat(key);
+      if (fromDemo) loadModel(model, '붙여넣기 기준', false, { pasted });
+      else {
+        S.model = model;
+        if (!S.isDemo) S.pasted = pasted;
+        rebuild('all');
+      }
+      saveModel();
       S.page = 0;
       renderAll();
-      toast('원본 ' + nf(rows.length) + '행으로 교체했습니다. [자동 일정수립]을 실행하세요');
+      const need = ['rooms', 'machines', 'rules', 'productivity'].filter((k) => !(S.model[k] || []).length);
+      toast(
+        sheetLabel(key) + ' ' + nf(rows.length) + '행 반영' +
+          (S.isDemo ? ' (예시 기준 위 – 회사 마스터를 먼저 붙여넣거나 엑셀을 불러오세요)' : need.length ? ' · 아직 필요한 시트: ' + need.map(sheetLabel).join(', ') : key === 'raw' ? ' · [자동 일정수립]을 실행하세요' : '')
+      );
     });
+  }
+  async function clearSaved() {
+    if (!window.confirm('이 PC 브라우저에 저장한 기준(원본·9번·마스터)을 지우고 예시 데이터로 돌아갈까요? 엑셀 파일은 그대로입니다.')) return;
+    await idb.del('model');
+    $('dlgPaste').close();
+    loadModel(window.CNCDemo.build(today), '예시 데이터', true);
+    toast('저장한 기준을 지웠습니다');
   }
 
   // ───────────────────────── 이벤트 ─────────────────────────
@@ -1462,10 +1575,13 @@
     $('settingsApply').onclick = applySettings;
     $('btnPaste').onclick = () => {
       $('pastePreview').textContent = '';
+      $('pasteStatus').innerHTML = pasteStatusHtml();
       $('dlgPaste').showModal();
     };
     $('pasteText').addEventListener('input', pastePreview);
+    $('pasteSheet').addEventListener('change', pastePreview);
     $('pasteApply').onclick = applyPaste;
+    $('pasteClear').onclick = clearSaved;
 
     for (const b of document.querySelectorAll('.tab'))
       b.addEventListener('click', () => {
@@ -1611,11 +1727,29 @@
     });
   }
 
+  /** 붙여넣기 창의 현재 기준 상태 (어떤 시트가 들어와 있는지) */
+  function pasteStatusHtml() {
+    if (S.isDemo) return '지금은 <b>예시 데이터</b>입니다. 회사 기준을 처음 넣을 때: 엑셀에서 3·4·5·6·9·13·23번 등 시트를 하나씩 전체 선택(Ctrl+A) → 복사(Ctrl+C) → 여기에 붙여넣기. 한 번 넣으면 이 PC에 저장되어 다음부터는 1_원본·9번만 바꾸면 됩니다.';
+    return (
+      '현재 기준: <b>' + esc(S.source) + '</b> · ' +
+      W.PASTE_SHEETS.map(([k, label]) => '<span class="' + ((S.model[k] || []).length ? '' : 'late-text') + '">' + esc(label.split('_')[0]) + ' ' + nf((S.model[k] || []).length) + '</span>').join(' · ')
+    );
+  }
+
   // ───────────────────────── 시작 ─────────────────────────
   bind();
-  loadModel(window.CNCDemo.build(today), '예시 데이터', true);
-  if (!S.planner.drafts.length) {
-    S.planner.autoPlan();
-    renderAll();
+  function startDemo() {
+    loadModel(window.CNCDemo.build(today), '예시 데이터', true);
+    if (!S.planner.drafts.length) {
+      S.planner.autoPlan();
+      renderAll();
+    }
   }
+  // 이 PC에 저장한 기준이 있으면 그것으로 시작 (없거나 브라우저가 막으면 예시 데이터)
+  Promise.race([idb.get('model'), new Promise((r) => setTimeout(() => r(null), 1500))]).then((saved) => {
+    if (saved && saved.model && (saved.model.machines || []).length) {
+      const restored = loadModel(saved.model, saved.source, false, saved);
+      toast('이 PC에 저장한 기준으로 시작했습니다 (' + saved.source + ')' + (restored ? ' · 가배정 ' + restored + '건 복원' : ''));
+    } else startDemo();
+  });
 })();

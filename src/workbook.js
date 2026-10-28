@@ -160,6 +160,11 @@
         eqBad.push(str(v));
         continue;
       }
+      // 날짜 서식이 걸린 칸을 복사하면 "05월 10일"·"5/10"처럼 보이므로 호기로 쓰지 않는다 (엑셀에서 열 서식을 '일반'으로)
+      if (typeof v === 'string' && /\d\s*(월|\/|-)\s*\d/.test(v)) {
+        eqBad.push(str(v));
+        continue;
+      }
       const no = E.machineNo(v);
       if (!/^\d+$/.test(no) || Number(no) <= 0 || Number(no) > 9999) eqBad.push(str(v));
       else if (!refMachines.includes(no)) refMachines.push(no);
@@ -167,12 +172,62 @@
     return eqBad.length ? { refMachines, eqBad } : { refMachines };
   }
 
+  /**
+   * 엑셀에서 복사한 클립보드 텍스트(TSV) → 2차원 배열.
+   * 셀 안에 줄바꿈·탭·따옴표가 있으면 엑셀이 "..."로 감싸므로 따옴표 규칙대로 읽는다 (예: 헤더 "특별(납기)⏎관리 여부").
+   */
+  function parseTSV(text) {
+    const t = String(text || '').replace(/\r\n?/g, '\n');
+    const rows = [];
+    let row = [];
+    let cell = '';
+    let i = 0;
+    let quoted = false;
+    const push = () => {
+      row.push(cell === '' ? null : cell);
+      cell = '';
+    };
+    while (i < t.length) {
+      const ch = t[i];
+      if (quoted) {
+        if (ch === '"' && t[i + 1] === '"') {
+          cell += '"';
+          i += 2;
+          continue;
+        }
+        if (ch === '"') {
+          quoted = false;
+          i++;
+          continue;
+        }
+        cell += ch;
+        i++;
+        continue;
+      }
+      if (ch === '"' && cell === '') {
+        quoted = true;
+        i++;
+        continue;
+      }
+      if (ch === '\t') push();
+      else if (ch === '\n') {
+        push();
+        rows.push(row.every((v) => v == null) ? [] : row);
+        row = [];
+      } else cell += ch;
+      i++;
+    }
+    if (cell !== '' || row.length) {
+      push();
+      rows.push(row);
+    }
+    return rows;
+  }
+
   /** 클립보드 붙여넣기 텍스트(TSV) → 원본 행. */
   function parsePastedText(text) {
-    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
-    const rows = lines.map((l) => (l === '' ? [] : l.split('\t').map((v) => (v === '' ? null : v))));
     // 엑셀에서 복사한 "1,234" 형태 숫자 정리는 toNum이 처리
-    return parseRawRows(rows);
+    return parseRawRows(parseTSV(text));
   }
 
   // ───────────── 마스터 ─────────────
@@ -359,6 +414,13 @@
 
   const CONFIRM_HEADERS = ['계획번호', '제품코드', '부품코드', '배정호기', '시작일', '완료일', '수량', '신규세팅여부', '담당작업자', '세팅가능확인', '간트표시', '비고', '검토결과', '최근실적일', '누적실적', '실적확인', '실적비고'];
 
+  /** 연도 없이 복사한 완료일이 시작일보다 반년 넘게 앞서면 다음 해 (예: 12/28 ~ 1/5) */
+  function endAfter(start, end) {
+    if (start == null || end == null || start - end < 180) return end;
+    const d = E.dateFromSerial(end);
+    return E.serialFromYMD(d.getFullYear() + 1, d.getMonth() + 1, d.getDate());
+  }
+
   function readConfirmed(rows) {
     const hm = headerMap(rows, '배정호기');
     if (!hm) return [];
@@ -391,7 +453,7 @@
         partCode: str(at(row, c.partCode)),
         machine: E.machineNo(at(row, c.machine)),
         start,
-        end: toSerial(at(row, c.end)),
+        end: endAfter(start, toSerial(at(row, c.end))),
         qty: toNum(at(row, c.qty)),
         newSetup: str(at(row, c.newSetup)),
         worker: str(at(row, c.worker)),
@@ -407,13 +469,58 @@
   }
 
   /** 통합문서 → 엔진 모델. 누락 시트는 warnings에 기록. */
+  const READERS = () => ({ raw: parseRawRows, rooms: readRooms, machines: readMachines, rules: readRules, productivity: readProductivity, workers: readWorkers, bgRules: readBGRules, bdSpecs: readBDSpecs, confirmed: readConfirmed, holidays: readHolidays, matExclusions: readMatExclusions });
+
+  /** 시트별 붙여넣기 대상 (보안 프로그램 때문에 엑셀 파일을 직접 못 읽을 때 시트를 복사해 붙여넣는다) */
+  const PASTE_SHEETS = [
+    ['raw', '1_원본붙여넣기'],
+    ['confirmed', '9_설비배정_확정'],
+    ['rooms', '3_방마스터'],
+    ['machines', '4_설비마스터'],
+    ['rules', '5_생산성분류'],
+    ['productivity', '6_생산성기준'],
+    ['workers', '13_작업자운영마스터'],
+    ['bgRules', '16_BG전용기준'],
+    ['bdSpecs', '21_BD규격마스터'],
+    ['holidays', '23_휴일마스터'],
+    ['matExclusions', '28_재질호기제외'],
+  ];
+  /** 붙여넣은 시트 텍스트(헤더 포함) → 해당 모델 배열 */
+  function readPastedSheet(key, text) {
+    const r = READERS()[key];
+    if (!r) throw new Error('알 수 없는 시트: ' + key);
+    // 복사한 값은 화면에 보이는 글자이므로 숫자처럼 보이는 칸("1,200", "0.6")은 숫자로 (앞자리 0 코드는 그대로)
+    const NUM = /^-?(?:0|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?:\.\d+)?$/;
+    const rows = parseTSV(text).map((row) => row.map((v) => (v != null && NUM.test(v.trim()) ? Number(v.trim().replace(/,/g, '')) : v)));
+    return r(rows);
+  }
+  /** 붙여넣은 텍스트의 머리행으로 어느 시트인지 추정 (못 찾으면 null) */
+  function guessPastedSheet(text) {
+    const head = parseTSV(String(text || '').split('\n').slice(0, 8).join('\n'))
+      .map((r) => r.map(norm).join('|'))
+      .join('\n');
+    const has = (...ks) => ks.every((k) => head.includes(k));
+    if (has('계획번호', '부품코드', '발주량')) return 'raw';
+    if (has('배정호기', '시작일', '완료일')) return 'confirmed';
+    if (has('호기', '방', '기종')) return 'machines';
+    if (has('방', '기본소재계열')) return 'rooms';
+    if (has('조건/키워드', '검색방식')) return 'rules';
+    if (has('품목군', '기준_일생산량')) return 'productivity';
+    if (has('호기', '담당작업자')) return 'workers';
+    if (has('BG최소외경')) return 'bgRules';
+    if (has('부품명', 'BD외경')) return 'bdSpecs';
+    if (has('날짜', '구분')) return 'holidays';
+    if (has('호기', '제외재질')) return 'matExclusions';
+    return null;
+  }
+
   function readWorkbook(data) {
     const XLSX = getXLSX();
     const wb = XLSX.read(data, { type: data instanceof ArrayBuffer || ArrayBuffer.isView(data) ? 'array' : 'buffer', cellDates: false, bookVBA: false });
     const model = { raw: [], rooms: [], machines: [], rules: [], productivity: [], workers: [], bgRules: [], bdSpecs: [], confirmed: [], holidays: [], matExclusions: [] };
     const warnings = [];
     const found = {};
-    const readers = { raw: parseRawRows, rooms: readRooms, machines: readMachines, rules: readRules, productivity: readProductivity, workers: readWorkers, bgRules: readBGRules, bdSpecs: readBDSpecs, confirmed: readConfirmed, holidays: readHolidays, matExclusions: readMatExclusions };
+    const readers = READERS();
     for (const [k, base] of Object.entries(SHEETS)) {
       const name = findSheet(wb, base);
       found[k] = name;
@@ -537,5 +644,5 @@
     return (prefix || 'CNC_일정수립결과') + '_' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes()) + '.xlsx';
   }
 
-  return { SHEETS, CONFIRM_HEADERS, readWorkbook, parseRawRows, parsePastedText, buildExportWorkbook, exportFileName };
+  return { SHEETS, CONFIRM_HEADERS, PASTE_SHEETS, readWorkbook, parseRawRows, parsePastedText, parseTSV, readPastedSheet, guessPastedSheet, buildExportWorkbook, exportFileName };
 });

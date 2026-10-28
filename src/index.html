@@ -1,7 +1,7 @@
 <title>CNC 가공일정 수립</title>
 <meta name="description" content="일정관리 프로그램 발주 붙여넣기 → 호기 자동 가배정 → 간트 검토 → 9번 확정시트/설비1~A 입력용 엑셀 내보내기">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<!-- 사내망·오프라인 전용: 이 파일은 어떤 서버와도 통신하지 않는다 (아래 정책이 브라우저의 외부 요청을 모두 막음) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <style>/*__APP_CSS__*/</style>
 
 <div class="app" id="app">
@@ -16,7 +16,7 @@
     <div class="actions">
       <label class="btn" for="fileInput">엑셀 불러오기</label>
       <input type="file" id="fileInput" accept=".xlsm,.xlsx,.xls" hidden>
-      <button class="btn" id="btnPaste" type="button">원본 붙여넣기</button>
+      <button class="btn" id="btnPaste" type="button">시트 붙여넣기</button>
       <button class="btn" id="btnSettings" type="button">기준 설정</button>
       <button class="btn primary" id="btnAuto" type="button">자동 일정수립</button>
       <button class="btn" id="btnExport" type="button">결과 엑셀 내보내기</button>
@@ -131,14 +131,18 @@
 
 <dialog id="dlgPaste" class="dialog">
   <form method="dialog" id="pasteForm">
-    <h2>일정관리 프로그램 원본 붙여넣기</h2>
+    <h2>엑셀 시트 붙여넣기 (원본·9번·마스터)</h2>
+    <p class="hint" id="pasteStatus"></p>
+    <div class="row"><label for="pasteSheet">붙여넣을 시트</label><select id="pasteSheet"><option value="auto">자동 판정 (머리행으로)</option><option value="raw">1_원본붙여넣기 (일정관리 프로그램 발주)</option><option value="confirmed">9_설비배정_확정</option><option value="rooms">3_방마스터</option><option value="machines">4_설비마스터</option><option value="rules">5_생산성분류</option><option value="productivity">6_생산성기준</option><option value="workers">13_작업자운영마스터</option><option value="bgRules">16_BG전용기준</option><option value="bdSpecs">21_BD규격마스터</option><option value="holidays">23_휴일마스터</option><option value="matExclusions">28_재질호기제외</option></select></div>
     <p class="hint">일정관리 프로그램에서 발주 목록을 <b>헤더 행 포함</b>으로 복사해 아래에 붙여넣으세요. 계획번호·제품코드·부품코드·발주량·요청일·재질 열을 헤더 이름으로 찾습니다. 헤더가 없으면 기존 1_원본붙여넣기 열 위치(E/G/H/I/L/AS)를 사용합니다.</p>
-    <p class="hint"><b>최신 전체 수주 자료를 통째로 교체</b>합니다 (신규분만 추가하지 않음, v738 fix20 운영 기준). 9번 확정과 담당자가 고친 가배정은 그대로 유지되고, 같은 행을 겹쳐 붙여넣어도 한 번만 셉니다.</p>
+    <p class="hint">보안 프로그램 때문에 엑셀 파일을 브라우저에서 직접 열 수 없을 때: 엑셀에서 시트를 열고 <b>Ctrl+A → Ctrl+C</b> 후 여기에 <b>Ctrl+V</b>. 붙여넣은 시트는 그 시트만 교체하고, 이 PC 브라우저에 저장됩니다(외부 전송 없음). 날짜 열은 연도가 보이는 서식(yyyy-mm-dd)이면 가장 정확합니다.</p>
+    <p class="hint">1_원본은 <b>최신 전체 수주 자료를 통째로 교체</b>합니다 (신규분만 추가하지 않음, v738 fix20 운영 기준). 9번 확정과 담당자가 고친 가배정은 그대로 유지되고, 같은 행을 겹쳐 붙여넣어도 한 번만 셉니다.</p>
     <textarea id="pasteText" rows="12" spellcheck="false" placeholder="여기에 Ctrl+V"></textarea>
     <p class="hint" id="pastePreview"></p>
     <div class="dialog-actions">
       <button class="btn" value="cancel" type="submit">닫기</button>
-      <button class="btn primary" id="pasteApply" type="button">원본 교체</button>
+      <button class="btn small danger" id="pasteClear" type="button">이 PC 저장 지우기</button>
+      <button class="btn primary" id="pasteApply" type="button">이 시트 반영</button>
     </div>
   </form>
 </dialog>

@@ -79,3 +79,35 @@ test('설비1~A: 날짜 일련번호 등 호기가 아닌 값은 빼고 따로 �
   assert.deepEqual(r.refMachines, ['121']);
   assert.deepEqual(r.eqBad, ['46155']);
 });
+
+test('시트 붙여넣기 (사내망 문서보안 대응): 따옴표 셀, 표시값 숫자·날짜, 시트 자동 판정', () => {
+  // 엑셀은 줄바꿈이 든 셀을 "..."로 감싸서 복사한다
+  assert.deepEqual(W.parseTSV('a\t"특별(납기)\n관리 여부"\tc\n1\t"x""y"\t\n'), [['a', '특별(납기)\n관리 여부', 'c'], ['1', 'x"y', null]]);
+  const mc = ['호기\t방\t원본시트\t소재\t기종\tBD최소외경\tPL가공가능', '1\t1번방\tSK\t\tP033H\t0.6\tY', '0012\t2번방\t\t\tP033\t"1,200"\tN'].join('\n');
+  assert.equal(W.guessPastedSheet(mc), 'machines');
+  const ms = W.readPastedSheet('machines', mc);
+  assert.equal(ms[0].bdMin, 0.6);
+  assert.equal(ms[1].bdMin, 1200);
+  // 9번: 연도 없는 m/d 날짜, 완료일이 시작일보다 앞서면 다음 해
+  const cf = [W.CONFIRM_HEADERS.join('\t'), ['P1', 'C1', 'PLDB1AR-B', '7', '12/28/26', '1/5', '1,000'].join('\t')].join('\n');
+  assert.equal(W.guessPastedSheet(cf), 'confirmed');
+  const [r] = W.readPastedSheet('confirmed', cf);
+  assert.equal(r.start, E.serialFromYMD(2026, 12, 28));
+  assert.equal(r.end - r.start, 8, '1/5는 다음 해');
+  assert.equal(r.qty, 1000);
+  // 날짜 서식이 걸린 설비 칸("05월 10일")은 호기로 쓰지 않음
+  const raw = ['계획번호\t제품코드\t부품코드\t발주량\t발주일\t설비1\t설비2', 'A1\tP\tPLDB1AR-B\t"2,000"\t2/24/26\t05월 10일\t131'].join('\n');
+  const [rr] = W.readPastedSheet('raw', raw);
+  assert.deepEqual([rr.qty, rr.orderDate, rr.refMachines, rr.eqBad], [2000, E.serialFromYMD(2026, 2, 24), ['131'], ['05월 10일']]);
+  assert.equal(W.guessPastedSheet('아무 글자\n1\t2'), null);
+});
+
+test('날짜 문자열: yyyy-mm-dd, m/d/yy, yy-mm-dd, 한글 월일', () => {
+  const ymd = (v) => E.fmtYMD(E.toSerial(v));
+  assert.equal(ymd('2026-02-24'), '2026-02-24');
+  assert.equal(ymd('2/24/26'), '2026-02-24');
+  assert.equal(ymd('26-02-24'), '2026-02-24');
+  assert.equal(ymd('2026년 2월 24일'), '2026-02-24');
+  assert.equal(ymd('12/31/2026'), '2026-12-31');
+  assert.equal(E.toSerial('abc'), null);
+});
