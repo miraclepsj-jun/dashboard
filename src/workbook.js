@@ -256,7 +256,10 @@
       .filter((r) => r && str(at(r, c.name)))
       .map((r) => {
         const o = {};
-        for (const k of Object.keys(c)) o[k] = k === 'name' ? str(at(r, c[k])) : at(r, c[k]);
+        for (const k of Object.keys(c)) {
+          const v = at(r, c[k]);
+          o[k] = k === 'name' ? str(v) : v === '' ? null : v;
+        }
         return o;
       });
   }
@@ -494,6 +497,33 @@
     const rows = parseTSV(text).map((row) => row.map((v) => (v != null && NUM.test(v.trim()) ? Number(v.trim().replace(/,/g, '')) : v)));
     return r(rows);
   }
+  // 엑셀 매크로(tools/modCNCWebCopy.bas)가 여러 시트를 한 번에 복사할 때 시트 앞에 넣는 표시 줄
+  const BUNDLE_MARK = '##CNC_SHEET\t';
+  /** 시트 이름 → 모델 키 (예: "4_설비마스터" → machines) */
+  function sheetKeyOf(name) {
+    const n = String(name || '').trim();
+    for (const [k, base] of Object.entries(SHEETS)) if (n === base || n.replace(/^\d+_/, '') === base || n.endsWith(base)) return k;
+    return null;
+  }
+  /**
+   * 묶음 붙여넣기: "##CNC_SHEET<탭>시트이름" 줄로 나뉜 여러 시트 → [{name, key, rows}] (표시 줄이 없으면 null).
+   * 매크로는 셀 값(Value2)을 그대로 보내므로 날짜는 일련번호, 호기는 숫자로 온다 (날짜 서식 영향 없음).
+   */
+  function readPastedBundle(text) {
+    const t = String(text || '').replace(/\r\n?/g, '\n');
+    if (!t.startsWith(BUNDLE_MARK) && !t.includes('\n' + BUNDLE_MARK)) return null;
+    const out = [];
+    const parts = ('\n' + t).split('\n' + BUNDLE_MARK).slice(1);
+    for (const part of parts) {
+      const nl = part.indexOf('\n');
+      const name = (nl < 0 ? part : part.slice(0, nl)).trim();
+      const body = nl < 0 ? '' : part.slice(nl + 1);
+      const key = sheetKeyOf(name);
+      out.push({ name, key, rows: key ? readPastedSheet(key, body) : [] });
+    }
+    return out;
+  }
+
   /** 붙여넣은 텍스트의 머리행으로 어느 시트인지 추정 (못 찾으면 null) */
   function guessPastedSheet(text) {
     const head = parseTSV(String(text || '').split('\n').slice(0, 8).join('\n'))
@@ -644,5 +674,5 @@
     return (prefix || 'CNC_일정수립결과') + '_' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes()) + '.xlsx';
   }
 
-  return { SHEETS, CONFIRM_HEADERS, PASTE_SHEETS, readWorkbook, parseRawRows, parsePastedText, parseTSV, readPastedSheet, guessPastedSheet, buildExportWorkbook, exportFileName };
+  return { SHEETS, CONFIRM_HEADERS, PASTE_SHEETS, readWorkbook, parseRawRows, parsePastedText, parseTSV, readPastedSheet, readPastedBundle, sheetKeyOf, guessPastedSheet, buildExportWorkbook, exportFileName };
 });

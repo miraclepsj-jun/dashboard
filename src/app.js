@@ -1498,7 +1498,21 @@
     }
     return { key, rows };
   }
+  // 시트 중요도: 필수(없으면 자동 일정수립 불가) · 권장(없으면 결과가 틀어짐) · 선택(해당 기능만 빠짐)
+  const SHEET_NEED = {
+    raw: '필수', rooms: '필수', machines: '필수', rules: '필수', productivity: '필수',
+    confirmed: '권장', holidays: '권장',
+    workers: '선택', matExclusions: '선택', bdSpecs: '선택', bgRules: '선택',
+  };
   function pastePreview() {
+    const bundle = W.readPastedBundle($('pasteText').value);
+    if (bundle) {
+      const ok = bundle.filter((b) => b.key && b.rows.length);
+      const bad = bundle.filter((b) => !b.key || !b.rows.length);
+      $('pastePreview').textContent =
+        '시트 묶음 ' + bundle.length + '개 · ' + ok.map((b) => sheetLabel(b.key) + ' ' + nf(b.rows.length) + '행').join(', ') + (bad.length ? ' · 읽지 못함: ' + bad.map((b) => b.name).join(', ') : '');
+      return { bundle: ok };
+    }
     const { key, rows } = pasteTarget();
     const ex = (r) =>
       key === 'raw'
@@ -1516,16 +1530,21 @@
     return { key, rows };
   }
   function applyPaste() {
-    const { key, rows } = pastePreview();
-    if (!key || !rows.length) return;
+    const pv = pastePreview();
+    // 한 시트 또는 매크로가 묶어 보낸 여러 시트
+    const sets = pv.bundle ? pv.bundle.map((b) => [b.key, b.rows]) : pv.key && pv.rows.length ? [[pv.key, pv.rows]] : [];
+    if (!sets.length) return;
+    const keys = sets.map((x) => x[0]);
+    const key = keys.length === 1 ? keys[0] : null;
+    const rows = key ? sets[0][1] : [];
     $('dlgPaste').close();
     $('pasteText').value = '';
-    busy(sheetLabel(key) + ' 반영 중…', () => {
+    busy((key ? sheetLabel(key) : '시트 ' + keys.length + '개') + ' 반영 중…', () => {
       // 예시 데이터 위에 회사 마스터를 섞지 않는다: 예시 상태에서 마스터·9번을 붙여넣으면 빈 기준에서 시작
-      const fromDemo = S.isDemo && key !== 'raw';
+      const fromDemo = S.isDemo && keys.some((k) => k !== 'raw');
       const base = fromDemo ? EMPTY_MODEL() : S.model;
-      const model = Object.assign({}, base, { [key]: rows });
-      const pasted = (fromDemo ? [] : (S.pasted || []).filter((k) => k !== key)).concat(key);
+      const model = Object.assign({}, base, Object.fromEntries(sets));
+      const pasted = (fromDemo ? [] : (S.pasted || []).filter((k) => !keys.includes(k))).concat(keys);
       if (fromDemo) loadModel(model, '붙여넣기 기준', false, { pasted });
       else {
         S.model = model;
@@ -1536,9 +1555,10 @@
       S.page = 0;
       renderAll();
       const need = ['rooms', 'machines', 'rules', 'productivity'].filter((k) => !(S.model[k] || []).length);
+      const head = key ? sheetLabel(key) + ' ' + nf(rows.length) + '행 반영' : '시트 ' + keys.length + '개 반영 (' + sets.map(([k, r]) => sheetLabel(k).split('_')[0] + '번 ' + nf(r.length)).join(', ') + ')';
       toast(
-        sheetLabel(key) + ' ' + nf(rows.length) + '행 반영' +
-          (S.isDemo ? ' (예시 기준 위 – 회사 마스터를 먼저 붙여넣거나 엑셀을 불러오세요)' : need.length ? ' · 아직 필요한 시트: ' + need.map(sheetLabel).join(', ') : key === 'raw' ? ' · [자동 일정수립]을 실행하세요' : '')
+        head +
+          (S.isDemo ? ' (예시 기준 위 – 회사 마스터를 먼저 붙여넣거나 엑셀을 불러오세요)' : need.length ? ' · 아직 필요한 시트: ' + need.map(sheetLabel).join(', ') : keys.includes('raw') ? ' · [자동 일정수립]을 실행하세요' : '')
       );
     });
   }
@@ -1729,10 +1749,26 @@
 
   /** 붙여넣기 창의 현재 기준 상태 (어떤 시트가 들어와 있는지) */
   function pasteStatusHtml() {
-    if (S.isDemo) return '지금은 <b>예시 데이터</b>입니다. 회사 기준을 처음 넣을 때: 엑셀에서 3·4·5·6·9·13·23번 등 시트를 하나씩 전체 선택(Ctrl+A) → 복사(Ctrl+C) → 여기에 붙여넣기. 한 번 넣으면 이 PC에 저장되어 다음부터는 1_원본·9번만 바꾸면 됩니다.';
+    const groups = ['필수', '권장', '선택']
+      .map((g) => {
+        const list = W.PASTE_SHEETS.filter(([k]) => SHEET_NEED[k] === g);
+        return (
+          '<b>' + g + '</b> ' +
+          list
+            .map(([k, label]) => {
+              const n = S.isDemo ? 0 : (S.model[k] || []).length;
+              return '<span class="' + (!n && g !== '선택' ? 'late-text' : '') + '">' + esc(label) + (S.isDemo ? '' : ' ' + nf(n)) + '</span>';
+            })
+            .join(', ')
+        );
+      })
+      .join('<br>');
     return (
-      '현재 기준: <b>' + esc(S.source) + '</b> · ' +
-      W.PASTE_SHEETS.map(([k, label]) => '<span class="' + ((S.model[k] || []).length ? '' : 'late-text') + '">' + esc(label.split('_')[0]) + ' ' + nf((S.model[k] || []).length) + '</span>').join(' · ')
+      (S.isDemo
+        ? '지금은 <b>예시 데이터</b>입니다. 회사 엑셀에서 <b>CNC_WebCopy_All</b> 매크로(modCNCWebCopy.bas)로 필요한 시트를 한 번에 복사해 붙여넣거나, 시트를 하나씩 Ctrl+A → Ctrl+C → 붙여넣기 하세요. 한 번 넣으면 이 PC에 저장되어 다음부터는 1_원본·9번만 바꾸면 됩니다.<br>'
+        : '현재 기준: <b>' + esc(S.source) + '</b> (숫자는 들어 있는 행 수)<br>') +
+      groups +
+      '<br><span class="hint">필수 = 없으면 자동 일정수립 불가 · 권장 = 없으면 결과가 틀어짐(9번 없으면 기존 확정 일정을 모름, 23번 없으면 토·일만 쉼) · 선택 = 해당 기능만 빠짐</span>'
     );
   }
 

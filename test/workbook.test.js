@@ -111,3 +111,22 @@ test('날짜 문자열: yyyy-mm-dd, m/d/yy, yy-mm-dd, 한글 월일', () => {
   assert.equal(ymd('12/31/2026'), '2026-12-31');
   assert.equal(E.toSerial('abc'), null);
 });
+
+test('엑셀 매크로 묶음 붙여넣기(CNC_WebCopy_All): 시트 여러 개를 셀 값 그대로 한 번에', () => {
+  const { buf } = demoWorkbook();
+  const { model } = W.readWorkbook(buf);
+  const wb = XLSX.read(buf, { type: 'buffer' });
+  // 매크로와 같은 형식: "##CNC_SHEET<탭>시트이름" 줄 + A1부터 Value2(날짜=일련번호, 호기=숫자)를 탭으로
+  const cell = (v) => (v == null ? '' : /[\t\n"]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
+  const bundle = wb.SheetNames.map((n) => '##CNC_SHEET\t' + n + '\n' + XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }).map((r) => r.map(cell).join('\t')).join('\n')).join('\n');
+  const got = W.readPastedBundle(bundle);
+  assert.equal(got.length, wb.SheetNames.length);
+  for (const b of got) {
+    assert.ok(b.key, b.name + ' 시트 판정');
+    // 빈 문자열 칸과 빈 칸은 같은 것으로 본다 (테스트용 통합문서는 빈 칸에 ''를 넣어 만듦)
+    const norm = (x) => JSON.parse(JSON.stringify(x, (k, v) => (v === '' ? null : v)));
+    assert.deepEqual(norm(b.rows), norm(model[b.key]), b.name + ' 내용이 파일 읽기와 같아야 함');
+  }
+  assert.equal(W.readPastedBundle('그냥 붙여넣은 글자'), null);
+  assert.equal(W.sheetKeyOf('2_원본정리'), null);
+});

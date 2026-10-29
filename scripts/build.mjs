@@ -1,5 +1,6 @@
 // 단일 HTML 파일 빌드: src/* + vendor/xlsx.full.min.js 를 인라인하여 dist/CNC_일정수립.html 생성
 // 사용: node scripts/build.mjs [--artifact <출력경로>]  (--artifact: <html>/<head> 없이 본문만)
+import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,4 +37,8 @@ if (ai >= 0) {
   const out = join(root, 'dist', 'CNC_일정수립.html');
   writeFileSync(out, html);
   console.log('built →', out, (html.length / 1024).toFixed(0) + 'KB');
+  // 엑셀 연계 매크로: VBA 가져오기는 한글 Windows 인코딩(CP949)·CRLF여야 한글이 깨지지 않는다
+  const bas = join(root, 'dist', 'modCNCWebCopy.bas');
+  const r = spawnSync('python3', ['-I', '-c', "import sys;s=open(sys.argv[1],encoding='utf-8').read().replace('\\r\\n','\\n').replace('\\n','\\r\\n');open(sys.argv[2],'wb').write(s.encode('cp949'))", join(root, 'tools', 'modCNCWebCopy.bas'), bas]);
+  console.log(r.status === 0 ? 'built → ' + bas + ' (CP949)' : 'modCNCWebCopy.bas 변환 건너뜀 (python3 필요): ' + String(r.stderr || r.error || ''));
 }
