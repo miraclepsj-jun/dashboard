@@ -334,6 +334,16 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   .ptable td.c2, .ptable td.c3, .ptable th.pd.off { background: #ddd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 .grid td.mlist { min-width: 180px; max-width: 260px; font-family: var(--mono); font-size: 12px; }
+
+/* NAS 공유 상태 */
+.share-chip { display: inline-flex; align-items: center; gap: 6px; }
+.share-chip .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.share-chip.ok .dot { background: var(--done); }
+.share-chip.dirty .dot { background: var(--draft); }
+.share-chip.newer .dot, .share-chip.need .dot { background: var(--late); }
+.share-status { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--surface-2); font-size: 13px; line-height: 1.6; }
+.share-status b { font-weight: 600; }
+#shBackups ul { margin: 6px 0 0; padding-left: 18px; max-height: 220px; overflow: auto; }
 </style>
 
 </head>
@@ -354,6 +364,7 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
       <button class="btn" id="btnSettings" type="button">기준 설정</button>
       <button class="btn primary" id="btnAuto" type="button">자동 일정수립</button>
       <button class="btn" id="btnExport" type="button">결과 엑셀 내보내기</button>
+      <button class="btn share-chip" id="btnShare" type="button" title="NAS 공유 폴더로 담당자끼리 같은 일정을 씁니다"><span class="dot" aria-hidden="true"></span><span id="shareChip">공유 안 함</span></button>
     </div>
   </header>
 
@@ -462,6 +473,25 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   </div>
   <div class="drawer-body" id="dwBody"></div>
 </aside>
+
+<dialog id="dlgShare" class="dialog">
+  <form method="dialog">
+    <h2>NAS 공유 – 담당자끼리 같은 일정 쓰기</h2>
+    <p class="hint">NAS 폴더의 <b>CNC_공유작업.json</b> 파일 하나에 기준 데이터·가배정·설정을 저장합니다. 서버 없이 이 브라우저가 폴더의 파일을 직접 읽고 씁니다 (외부 통신 없음). 일정을 고친 뒤 <b>[공유 저장]</b>을 누르면 다른 담당자·반장 화면에 반영됩니다. 다른 담당자가 먼저 저장했으면 품목별로 합치고, 같은 품목을 둘 다 고친 경우에만 어느 쪽을 쓸지 묻습니다. 저장할 때마다 이전 파일이 <b>백업</b> 폴더에 남습니다.</p>
+    <div class="row"><label for="shName">내 이름</label><input type="text" id="shName" placeholder="저장자 표시용 (예: 박○○)" style="width:180px"></div>
+    <div class="share-status" id="shStatus"></div>
+    <div class="row">
+      <button class="btn" id="shConnect" type="button">공유 폴더 연결</button>
+      <button class="btn" id="shReconnect" type="button" hidden>다시 연결 (권한 허용)</button>
+      <button class="btn" id="shPull" type="button">가져오기</button>
+      <button class="btn primary" id="shSave" type="button">공유 저장</button>
+      <button class="btn small danger" id="shDisconnect" type="button">연결 끊기</button>
+    </div>
+    <p class="hint">폴더 고르기 창 위쪽 주소 칸에 NAS 폴더 주소(예: <code>\\NAS\생산계획\CNC</code>)를 그대로 입력하고 Enter → [폴더 선택]. 브라우저가 "편집 허용"을 물으면 허용하세요. 다음부터는 열 때 같은 폴더를 자동으로 씁니다 (창을 새로 열면 권한을 한 번 더 물을 수 있음).</p>
+    <details><summary>백업에서 되돌리기</summary><div id="shBackups" class="hint">공유 폴더를 연결하면 목록이 나옵니다</div></details>
+    <div class="dialog-actions"><button class="btn" value="cancel" type="submit">닫기</button></div>
+  </form>
+</dialog>
 
 <dialog id="dlgPaste" class="dialog">
   <form method="dialog" id="pasteForm">
@@ -996,6 +1026,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       .map((r) => r.room);
     const band = '외경구간<=' + p.od.toFixed(1) + ', 길이구간<=' + p.len + 'mm';
     return rooms.length ? 'BG 전용방 추정(' + rooms.join('/') + '): ' + band : 'BG전용기준 확인 필요: ' + band;
+  }
+
+  /** 저장해 둔 가배정을 다시 넣을 때 유지할 표시 (값이 있는 것만) */
+  function draftMeta(d) {
+    const m = { multi: !!d.multi };
+    for (const k of ['auto', 'manual', 'grade', 'pooled']) if (d[k] !== undefined) m[k] = d[k];
+    return m;
   }
 
   // ───────────────────────── 배정대상 생성 ─────────────────────────
@@ -2429,7 +2466,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       this.removeDraftsForItem(key);
       const allocs = this.allocate(machines, qty, days, Math.min(...backup.map((d) => d.start)), item.partCode);
       if (!allocs) {
-        for (const d of backup) this.addDrafts(item, [d], { auto: d.auto, manual: d.manual, grade: d.grade });
+        for (const d of backup) this.addDrafts(item, [d], draftMeta(d));
         this.results[key] = prevResult;
         return { ok: false, error: '배정 가능한 빈 구간이 없습니다' };
       }
@@ -2615,7 +2652,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       for (const d of state.drafts) {
         const item = this.itemByKey[d.itemKey];
         if (!item) continue;
-        this.addDrafts(item, [d], { auto: d.auto, manual: d.manual, grade: d.grade });
+        this.addDrafts(item, [d], draftMeta(d));
         n++;
       }
       for (const [k, v] of Object.entries(state.results || {})) if (this.itemByKey[k]) this.results[k] = v;
@@ -4414,6 +4451,166 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   return { build, toSheets };
 });
 </script>
+<script>/*
+ * NAS 공유 작업 파일 (일정 수정 담당 2명 + 보기·출력 여러 명).
+ * 기준 데이터·가배정·설정을 NAS 폴더의 CNC_공유작업.json 하나로 저장하고 불러온다.
+ * 마지막으로 맞춘 상태(기준점)의 요약값만 기억해 두었다가, 다른 담당자가 먼저 저장했으면
+ * 품목 단위로 "내가 바꾼 것은 내 것, 상대가 바꾼 것은 상대 것"으로 합친다. 둘 다 바꾼 품목만 담당자가 고른다.
+ * 서버 없이 브라우저가 폴더의 파일을 직접 읽고 쓴다 (File System Access). 여기는 파일 입출력이 없는 순수 함수만.
+ */
+(function (root, factory) {
+  const api = factory(root);
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  else root.CNCShare = api;
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const FILE = 'CNC_공유작업.json';
+  const BACKUP_DIR = '백업';
+  const KEEP_BACKUPS = 40;
+  const FORMAT = 1;
+  const MODEL_KEYS = ['raw', 'rooms', 'machines', 'rules', 'productivity', 'workers', 'bgRules', 'bdSpecs', 'confirmed', 'holidays', 'matExclusions'];
+
+  /** 문자열 요약값 (FNV-1a 32비트) – 바뀌었는지만 보면 되므로 짧게 */
+  function hash(s) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(36) + ':' + s.length.toString(36);
+  }
+  const hj = (v) => hash(JSON.stringify(v === undefined ? null : v));
+
+  // 가배정 비교에서 빼는 값: 불러올 때마다 새로 매기는 번호
+  const draftNorm = (d) => {
+    const o = {};
+    for (const k of Object.keys(d).sort()) if (k !== 'id') o[k] = d[k];
+    return o;
+  };
+
+  /** 품목별 묶음: {품목키: {drafts:[...], result}} */
+  function itemsOf(state) {
+    const plan = (state && state.plan) || {};
+    const out = {};
+    const get = (k) => out[k] || (out[k] = { drafts: [], result: null });
+    for (const d of plan.drafts || []) get(d.itemKey).drafts.push(draftNorm(d));
+    for (const [k, v] of Object.entries(plan.results || {})) get(k).result = v;
+    for (const v of Object.values(out)) v.drafts.sort((a, b) => a.start - b.start || String(a.machine).localeCompare(String(b.machine)) || a.qty - b.qty);
+    return out;
+  }
+
+  /** 상태 요약 (기준점으로 저장해 두는 값) */
+  function digest(state) {
+    const model = {};
+    for (const k of MODEL_KEYS) model[k] = hj((state.model || {})[k] || []);
+    const items = {};
+    for (const [k, v] of Object.entries(itemsOf(state))) items[k] = hj(v);
+    return { rev: state.rev || 0, model, settings: hj(state.settings || {}), manualRows: hj(state.manualRows || []), items };
+  }
+
+  /** 지금 상태가 기준점에서 바뀌었는지 (저장 안 한 변경) */
+  function changes(base, state) {
+    if (!base) return { any: true, model: [], items: 0, settings: false };
+    const d = digest(state);
+    const model = MODEL_KEYS.filter((k) => d.model[k] !== base.model[k]);
+    const keys = new Set(Object.keys(d.items).concat(Object.keys(base.items)));
+    let items = 0;
+    for (const k of keys) if (d.items[k] !== base.items[k]) items++;
+    const settings = d.settings !== base.settings;
+    const manual = d.manualRows !== base.manualRows;
+    return { any: model.length > 0 || items > 0 || settings || manual, model, items, settings, manual };
+  }
+
+  /**
+   * 3자 병합: base(마지막으로 맞춘 기준점 요약), mine(내 화면), theirs(공유 파일).
+   * 바뀐 쪽을 택하고, 둘 다 다르게 바꾼 것은 preferMine이면 내 것(아니면 상대 것).
+   * 반환 {state, report:{mineItems, theirItems, bothItems:[키], model:{k:'mine'|'theirs'|'both'}, settings}}
+   */
+  function merge(base, mine, theirs, preferMine) {
+    const pick = (bh, mh, th) => (mh === th ? 'same' : mh !== bh && th === bh ? 'mine' : mh === bh ? 'theirs' : 'both');
+    const dm = digest(mine);
+    const dt = digest(theirs);
+    const report = { mineItems: 0, theirItems: 0, bothItems: [], model: {}, settings: 'same', manualRows: 'same' };
+    const take = (who) => (who === 'mine' || (who === 'both' && preferMine) ? mine : theirs);
+
+    const model = {};
+    for (const k of MODEL_KEYS) {
+      const w = pick(base.model[k], dm.model[k], dt.model[k]);
+      if (w !== 'same') report.model[k] = w;
+      model[k] = (take(w).model || {})[k] || [];
+    }
+    report.settings = pick(base.settings, dm.settings, dt.settings);
+    report.manualRows = pick(base.manualRows, dm.manualRows, dt.manualRows);
+
+    const im = itemsOf(mine);
+    const it = itemsOf(theirs);
+    const drafts = [];
+    const results = {};
+    for (const k of new Set(Object.keys(im).concat(Object.keys(it)))) {
+      const w = pick(base.items[k], dm.items[k], dt.items[k]);
+      if (w === 'mine') report.mineItems++;
+      else if (w === 'theirs') report.theirItems++;
+      else if (w === 'both') report.bothItems.push(k);
+      const src = (w === 'mine' || (w === 'both' && preferMine) ? im : it)[k];
+      if (!src) continue;
+      drafts.push(...src.drafts);
+      if (src.result) results[k] = src.result;
+    }
+    const rawSide = report.model.raw ? take(report.model.raw) : theirs;
+    const state = {
+      app: 'CNC_일정수립',
+      format: FORMAT,
+      rev: theirs.rev || 0,
+      source: rawSide.source || theirs.source || mine.source,
+      pasted: rawSide.pasted || [],
+      model,
+      plan: { drafts, results },
+      settings: take(report.settings).settings || {},
+      manualRows: take(report.manualRows).manualRows || [],
+    };
+    return { state, report };
+  }
+
+  /** 같은 호기에서 겹치는 가배정 (병합 뒤 확인용) */
+  function overlaps(state) {
+    const by = new Map();
+    const add = (m, s, e, what) => {
+      if (m == null || s == null || e == null) return;
+      const k = String(m);
+      if (!by.has(k)) by.set(k, []);
+      by.get(k).push({ s, e, what });
+    };
+    for (const c of (state.model && state.model.confirmed) || []) add(c.machine, c.start, c.end, null);
+    for (const d of (state.plan && state.plan.drafts) || []) add(d.machine, d.start, d.end, d);
+    const out = [];
+    for (const [m, list] of by) {
+      list.sort((a, b) => a.s - b.s);
+      for (let i = 0; i < list.length; i++)
+        for (let j = i + 1; j < list.length && list[j].s <= list[i].e; j++)
+          if (list[i].what || list[j].what) out.push({ machine: m, a: list[i].what, b: list[j].what });
+    }
+    return out;
+  }
+
+  /** 공유 파일 내용 검사 */
+  function parse(text) {
+    const st = JSON.parse(text);
+    if (!st || st.app !== 'CNC_일정수립' || !st.model) throw new Error('CNC 공유작업 파일이 아닙니다');
+    return st;
+  }
+
+  /** 백업 파일 이름: 순번이 앞에 와서 이름순 = 저장순 */
+  function backupName(rev, savedAt, who) {
+    const d = new Date(savedAt || Date.now());
+    const p = (n) => String(n).padStart(2, '0');
+    const stamp = d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+    return 'CNC_공유작업_' + String(rev || 0).padStart(6, '0') + '_' + stamp + '_' + String(who || '이름없음').replace(/[\\/:*?"<>|\s]+/g, '') + '.json';
+  }
+
+  return { FILE, BACKUP_DIR, KEEP_BACKUPS, FORMAT, MODEL_KEYS, hash, digest, changes, merge, overlaps, parse, backupName, itemsOf };
+});
+</script>
 <script>/* CNC 가공일정 수립 - 화면 */
 (function () {
   'use strict';
@@ -4639,6 +4836,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
     renderReviewCount();
     if (S.openKey) renderDrawer();
+    if (S.share && S.share.dir) scheduleDirty();
   }
 
   function renderSource() {
@@ -5986,6 +6184,353 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     toast('저장한 기준을 지웠습니다');
   }
 
+  // ───────────────────────── NAS 공유 (담당자 2명 + 보기 여러 명) ─────────────────────────
+  // 공유 폴더(디렉터리 핸들)와 마지막으로 맞춘 기준점 요약은 이 PC 브라우저에 기억한다.
+  const Sh = window.CNCShare;
+  S.share = { dir: null, perm: 'none', base: null, remote: null, lastMod: 0, newer: false, dirty: null };
+  const fsOK = typeof window.showDirectoryPicker === 'function';
+
+  function currentState() {
+    return {
+      app: 'CNC_일정수립',
+      format: Sh.FORMAT,
+      rev: S.share.base ? S.share.base.rev : 0,
+      source: S.source,
+      pasted: S.pasted || [],
+      model: S.model,
+      plan: S.planner.exportState(),
+      settings: S.settings,
+      manualRows: S.manualRows || [],
+    };
+  }
+  /** 공유 상태를 화면에 반영 (기준·가배정·설정 모두 교체) */
+  function applyState(st) {
+    S.settings = Object.assign({}, DEFAULTS, st.settings || {}, { v: SETTINGS_VERSION });
+    store.set('cnc.settings', S.settings);
+    S.baseDate = today + (S.settings.baseOffset != null ? S.settings.baseOffset : 1);
+    S.source = st.source || '공유 작업';
+    S.isDemo = false;
+    store.set(draftStoreKey(), st.plan || { drafts: [], results: {} });
+    store.set(manualStoreKey(), st.manualRows || []);
+    loadModel(st.model, S.source, false, { pasted: st.pasted || [] });
+    saveModel();
+    renderSource();
+  }
+  function setBase(st) {
+    S.share.base = Sh.digest(st);
+    S.share.base.savedBy = st.savedBy || '';
+    S.share.base.savedAt = st.savedAt || 0;
+    idb.set('shareBase', S.share.base);
+    S.share.newer = false;
+  }
+  async function readRemote() {
+    let fh;
+    try {
+      fh = await S.share.dir.getFileHandle(Sh.FILE);
+    } catch (e) {
+      return null;
+    }
+    const file = await fh.getFile();
+    const text = await file.text();
+    S.share.lastMod = file.lastModified;
+    const st = Sh.parse(text);
+    S.share.remote = { rev: st.rev || 0, savedBy: st.savedBy || '', savedAt: st.savedAt || 0 };
+    return { st, text };
+  }
+  async function writeRemote(st, prevText) {
+    const dir = S.share.dir;
+    // 덮어쓰기 전 이전 공유 파일을 백업 폴더에 남긴다 (최근 KEEP_BACKUPS개)
+    if (prevText) {
+      try {
+        const bd = await dir.getDirectoryHandle(Sh.BACKUP_DIR, { create: true });
+        let prev = {};
+        try {
+          prev = JSON.parse(prevText);
+        } catch (e) {
+          /* 이전 파일이 깨졌어도 원문 그대로 백업 */
+        }
+        const bf = await bd.getFileHandle(Sh.backupName(prev.rev, prev.savedAt, prev.savedBy), { create: true });
+        const bw = await bf.createWritable();
+        await bw.write(prevText);
+        await bw.close();
+        const names = [];
+        for await (const [name, h] of bd.entries()) if (h.kind === 'file' && name.startsWith('CNC_공유작업_')) names.push(name);
+        names.sort();
+        for (const n of names.slice(0, Math.max(0, names.length - Sh.KEEP_BACKUPS))) await bd.removeEntry(n);
+      } catch (e) {
+        toast('백업을 남기지 못했습니다: ' + e.message);
+      }
+    }
+    const fh = await dir.getFileHandle(Sh.FILE, { create: true });
+    const w = await fh.createWritable();
+    await w.write(JSON.stringify(st));
+    await w.close();
+    // 거의 같은 순간에 다른 담당자도 저장했는지 다시 읽어 확인
+    const back = await readRemote();
+    return back && back.st.token === st.token;
+  }
+  function myName() {
+    let n = ($('shName') && $('shName').value.trim()) || store.get('cnc.userName', '');
+    if (!n) n = (window.prompt('공유 저장에 표시할 이름을 입력하세요 (예: 박○○)') || '').trim();
+    if (n) store.set('cnc.userName', n);
+    return n;
+  }
+  /** 상대가 먼저 저장한 내용과 내 변경을 합친다. 같은 품목을 둘 다 고쳤으면 묻는다. 반환 병합 상태 또는 null(취소) */
+  function mergeWithRemote(remote) {
+    const mine = currentState();
+    let m = Sh.merge(S.share.base, mine, remote, false);
+    if (m.report.bothItems.length || Object.values(m.report.model).includes('both') || m.report.settings === 'both') {
+      const who = remote.savedBy || '다른 담당자';
+      const keys = m.report.bothItems.slice(0, 5).map((k) => (S.planner.itemByKey[k] ? S.planner.itemByKey[k].partCode : k.split('|').pop()));
+      const msg =
+        who + '님도 같은 내용을 고쳤습니다.\n' +
+        (m.report.bothItems.length ? '· 같은 품목 ' + m.report.bothItems.length + '건: ' + keys.join(', ') + (m.report.bothItems.length > 5 ? ' 외' : '') + '\n' : '') +
+        (Object.entries(m.report.model).filter(([, w]) => w === 'both').length ? '· 같은 시트: ' + Object.entries(m.report.model).filter(([, w]) => w === 'both').map(([k]) => k).join(', ') + '\n' : '') +
+        (m.report.settings === 'both' ? '· 기준 설정\n' : '') +
+        '\n[확인] = 내 것으로 / [취소] = ' + who + '님 것으로';
+      m = Sh.merge(S.share.base, mine, remote, window.confirm(msg));
+    }
+    return m;
+  }
+  function overlapNote(st) {
+    const ov = Sh.overlaps(st);
+    return ov.length ? ' · 같은 호기 일정 겹침 ' + ov.length + '건 (간트에서 확인: ' + [...new Set(ov.map((o) => o.machine))].slice(0, 6).join(', ') + '호기)' : '';
+  }
+
+  async function shareConnect() {
+    if (!fsOK) return toast('이 브라우저는 폴더 연결을 지원하지 않습니다. 엣지·크롬 최신 버전을 쓰세요');
+    let dir;
+    try {
+      dir = await window.showDirectoryPicker({ id: 'cnc-share', mode: 'readwrite' });
+    } catch (e) {
+      return; // 취소
+    }
+    S.share.dir = dir;
+    S.share.perm = 'granted';
+    S.share.base = null;
+    await idb.set('shareDir', dir);
+    await idb.del('shareBase');
+    let remote = null;
+    try {
+      remote = await readRemote();
+    } catch (e) {
+      return toast('공유 파일을 읽지 못했습니다: ' + e.message);
+    }
+    if (remote) {
+      const r = remote.st;
+      if (S.isDemo || window.confirm('공유 파일(' + (r.savedBy || '') + ' ' + fmtTime(r.savedAt) + ' 저장)을 불러옵니다. 지금 화면의 기준·가배정은 공유 파일 내용으로 바뀝니다.\n\n[취소]를 누르면 연결만 하고, 다음 [공유 저장] 때 합칩니다.')) {
+        busy('공유 파일 불러오는 중…', () => {
+          applyState(r);
+          setBase(r);
+          renderShare();
+          toast('공유 폴더 연결 · ' + (r.savedBy || '') + ' 저장본을 불러왔습니다' + overlapNote(r));
+        });
+        return;
+      }
+    } else if (!S.isDemo) {
+      if (window.confirm('이 폴더에 공유 파일이 없습니다. 지금 화면의 기준·가배정으로 공유 파일을 만들까요?')) return shareSave();
+    } else toast('공유 폴더를 연결했습니다. 회사 기준을 불러온 뒤 [공유 저장]을 누르세요');
+    renderShare();
+  }
+  async function shareReconnect() {
+    if (!S.share.dir) return shareConnect();
+    try {
+      S.share.perm = await S.share.dir.requestPermission({ mode: 'readwrite' });
+    } catch (e) {
+      S.share.perm = 'denied';
+    }
+    renderShare();
+    if (S.share.perm === 'granted') shareCheck(true);
+  }
+  async function shareDisconnect() {
+    if (!window.confirm('공유 폴더 연결을 끊을까요? NAS의 공유 파일은 그대로 남고, 이 PC만 공유를 쓰지 않습니다.')) return;
+    S.share = { dir: null, perm: 'none', base: null, remote: null, lastMod: 0, newer: false, dirty: null };
+    await idb.del('shareDir');
+    await idb.del('shareBase');
+    renderShare();
+  }
+  async function shareSave() {
+    if (!S.share.dir || S.share.perm !== 'granted') return toast('먼저 공유 폴더를 연결하세요');
+    if (S.isDemo) return toast('예시 데이터는 공유하지 않습니다. 회사 기준을 불러오세요');
+    const name = myName();
+    if (!name) return toast('이름을 입력해야 공유 저장할 수 있습니다');
+    let remote;
+    try {
+      remote = await readRemote();
+    } catch (e) {
+      return toast('공유 파일을 읽지 못했습니다: ' + e.message);
+    }
+    let st = currentState();
+    let note = '';
+    if (remote && S.share.base && (remote.st.rev || 0) !== S.share.base.rev) {
+      // 내가 맞춘 뒤 다른 담당자가 저장함 → 합쳐서 저장
+      const m = mergeWithRemote(remote.st);
+      st = m.state;
+      note = ' · ' + (remote.st.savedBy || '다른 담당자') + '님 변경 ' + m.report.theirItems + '품목과 합침';
+      applyState(st);
+    } else if (remote && !S.share.base) {
+      if (!window.confirm('공유 파일(' + (remote.st.savedBy || '') + ' ' + fmtTime(remote.st.savedAt) + ')을 지금 화면 내용으로 덮어쓸까요? (이전 파일은 백업 폴더에 남습니다)')) return;
+    }
+    st = Object.assign({}, st, { rev: (remote ? remote.st.rev || 0 : 0) + 1, savedBy: name, savedAt: Date.now(), token: Math.random().toString(36).slice(2) });
+    let ok = false;
+    try {
+      ok = await writeRemote(st, remote && remote.text);
+    } catch (e) {
+      return toast('공유 저장 실패: ' + e.message + ' (NAS 연결·폴더 권한 확인)');
+    }
+    setBase(st);
+    renderShare();
+    toast(ok ? '공유 저장 완료 (' + st.rev + '번째)' + note + overlapNote(st) : '거의 동시에 다른 담당자도 저장했습니다. [가져오기] 후 다시 [공유 저장] 하세요');
+  }
+  async function sharePull(silent) {
+    if (!S.share.dir || S.share.perm !== 'granted') return;
+    let remote;
+    try {
+      remote = await readRemote();
+    } catch (e) {
+      return toast('공유 파일을 읽지 못했습니다: ' + e.message);
+    }
+    if (!remote) return silent || toast('공유 파일이 아직 없습니다');
+    const r = remote.st;
+    const dirty = !S.share.base || S.isDemo ? false : Sh.changes(S.share.base, currentState()).any;
+    if (!dirty || S.isDemo) {
+      busy('공유 일정 가져오는 중…', () => {
+        applyState(r);
+        setBase(r);
+        renderShare();
+        toast((r.savedBy || '다른 담당자') + '님이 ' + fmtTime(r.savedAt) + '에 저장한 일정을 가져왔습니다' + overlapNote(r));
+      });
+      return;
+    }
+    // 저장하지 않은 내 변경이 있음 → 합쳐서 화면에 반영 (공유 파일에는 아직 쓰지 않음)
+    const m = mergeWithRemote(r);
+    busy('공유 일정과 합치는 중…', () => {
+      applyState(m.state);
+      setBase(r);
+      renderShare();
+      toast((r.savedBy || '다른 담당자') + '님 변경 ' + m.report.theirItems + '품목을 가져와 내 변경 ' + m.report.mineItems + '품목과 합쳤습니다 · [공유 저장]으로 올리세요' + overlapNote(m.state));
+    });
+  }
+  /** 30초마다: 다른 사람이 새로 저장했는지 (내 변경이 없으면 자동으로 가져옴) */
+  async function shareCheck(force) {
+    if (!S.share.dir || S.share.perm !== 'granted' || !S.planner) return;
+    if (!force && document.hidden) return;
+    try {
+      const fh = await S.share.dir.getFileHandle(Sh.FILE);
+      const f = await fh.getFile();
+      if (!force && f.lastModified === S.share.lastMod) return updateDirty();
+      const remote = await readRemote();
+      if (!remote) return;
+      const newer = !S.share.base || (remote.st.rev || 0) !== S.share.base.rev;
+      if (!newer) return updateDirty();
+      updateDirty();
+      if (!S.share.dirty || !S.share.dirty.any) return sharePull(true);
+      S.share.newer = true;
+      renderShare();
+    } catch (e) {
+      /* 파일이 없거나 NAS가 잠시 끊김 - 다음 확인 때 다시 */
+    }
+  }
+  // 화면이 바뀔 때마다 공유 파일과 다른지 다시 본다 (연속 조작은 한 번에)
+  let dirtyTimer = 0;
+  function scheduleDirty() {
+    clearTimeout(dirtyTimer);
+    dirtyTimer = setTimeout(updateDirty, 800);
+  }
+  function updateDirty() {
+    if (!S.share.dir || !S.planner || S.isDemo) return;
+    S.share.dirty = S.share.base ? Sh.changes(S.share.base, currentState()) : { any: true, items: 0, model: [], settings: false };
+    renderShare();
+  }
+  function fmtTime(t) {
+    return t ? new Date(t).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
+  }
+  function renderShare() {
+    const sh = S.share;
+    const chip = $('btnShare');
+    let cls = '';
+    let txt = '공유 안 함';
+    if (sh.dir && sh.perm !== 'granted') {
+      cls = 'need';
+      txt = '공유 다시 연결';
+    } else if (sh.dir) {
+      const d = sh.dirty;
+      if (sh.newer) {
+        cls = 'newer';
+        txt = '새 공유 저장 있음';
+      } else if (d && d.any) {
+        cls = 'dirty';
+        txt = '공유 저장 안 한 변경';
+      } else {
+        cls = 'ok';
+        txt = '공유 최신' + (sh.remote && sh.remote.rev ? ' #' + sh.remote.rev : '');
+      }
+    }
+    chip.className = 'btn share-chip ' + cls;
+    $('shareChip').textContent = txt;
+    if (!$('dlgShare').open) return;
+    $('shReconnect').hidden = !(sh.dir && sh.perm !== 'granted');
+    $('shConnect').textContent = sh.dir ? '공유 폴더 바꾸기' : '공유 폴더 연결';
+    for (const id of ['shPull', 'shSave', 'shDisconnect']) $(id).disabled = !sh.dir || sh.perm !== 'granted';
+    const d = sh.dirty;
+    $('shStatus').innerHTML = !fsOK
+      ? '<span class="late-text">이 브라우저는 폴더 연결을 지원하지 않습니다 (엣지·크롬 최신 버전 필요)</span>'
+      : !sh.dir
+      ? '공유 폴더가 연결되어 있지 않습니다. 이 PC의 기준·가배정은 이 PC에만 있습니다.'
+      : '연결 폴더: <b>' + esc(sh.dir.name) + '</b>' + (sh.perm !== 'granted' ? ' <span class="late-text">(권한 다시 허용 필요)</span>' : '') +
+        '<br>공유 파일: ' + (sh.remote ? '<b>' + sh.remote.rev + '번째</b> 저장 · ' + esc(sh.remote.savedBy || '-') + ' · ' + fmtTime(sh.remote.savedAt) : '아직 없음') +
+        (sh.newer ? ' <span class="late-text">← 내가 맞춘 뒤 새로 저장됨, [가져오기]</span>' : '') +
+        '<br>내 화면: ' + (d && d.any ? '<b>공유 저장 안 한 변경</b> ' + [d.items ? '품목 ' + d.items + '건' : '', d.model.length ? '시트 ' + d.model.join(', ') : '', d.settings ? '기준 설정' : ''].filter(Boolean).join(' · ') : '공유 파일과 같음');
+  }
+  async function renderBackups() {
+    const box = $('shBackups');
+    if (!S.share.dir || S.share.perm !== 'granted') return (box.textContent = '공유 폴더를 연결하면 목록이 나옵니다');
+    try {
+      const bd = await S.share.dir.getDirectoryHandle(Sh.BACKUP_DIR, { create: true });
+      const names = [];
+      for await (const [name, h] of bd.entries()) if (h.kind === 'file' && name.startsWith('CNC_공유작업_')) names.push(name);
+      names.sort().reverse();
+      box.innerHTML = names.length
+        ? '이전 공유 저장본 (불러오면 내 화면만 바뀌고, [공유 저장]을 눌러야 모두에게 반영됩니다)<ul>' + names.slice(0, 20).map((n) => '<li>' + esc(n.replace('CNC_공유작업_', '').replace('.json', '')) + ' <button class="btn small" type="button" data-backup="' + esc(n) + '">불러오기</button></li>').join('') + '</ul>'
+        : '아직 백업이 없습니다';
+      for (const b of box.querySelectorAll('[data-backup]'))
+        b.onclick = async () => {
+          if (!window.confirm(b.dataset.backup + '\n이 저장본으로 내 화면을 되돌릴까요?')) return;
+          const f = await (await bd.getFileHandle(b.dataset.backup)).getFile();
+          const st = Sh.parse(await f.text());
+          busy('백업 불러오는 중…', () => {
+            applyState(st);
+            updateDirty();
+            toast('백업을 불러왔습니다. 모두에게 되돌리려면 [공유 저장]을 누르세요');
+          });
+        };
+    } catch (e) {
+      box.textContent = '백업 목록을 읽지 못했습니다: ' + e.message;
+    }
+  }
+  function openShare() {
+    $('shName').value = store.get('cnc.userName', '');
+    $('dlgShare').showModal();
+    updateDirty();
+    renderShare();
+    renderBackups();
+  }
+  async function shareInit() {
+    if (!fsOK) return renderShare();
+    const dir = await idb.get('shareDir');
+    if (!dir) return renderShare();
+    S.share.dir = dir;
+    S.share.base = await idb.get('shareBase');
+    try {
+      S.share.perm = await dir.queryPermission({ mode: 'readwrite' });
+    } catch (e) {
+      S.share.perm = 'prompt';
+    }
+    renderShare();
+    if (S.share.perm === 'granted') shareCheck(true);
+    else toast('NAS 공유 폴더 권한을 다시 허용해야 합니다 · 오른쪽 위 [공유 다시 연결]을 누르세요');
+  }
+
   // ───────────────────────── 이벤트 ─────────────────────────
   function bind() {
     $('fileInput').addEventListener('change', (e) => {
@@ -6018,6 +6563,23 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     $('pasteSheet').addEventListener('change', pastePreview);
     $('pasteApply').onclick = applyPaste;
     $('pasteClear').onclick = clearSaved;
+    $('btnShare').onclick = () => (S.share.dir && S.share.perm !== 'granted' ? shareReconnect() : openShare());
+    $('shConnect').onclick = shareConnect;
+    $('shReconnect').onclick = shareReconnect;
+    $('shSave').onclick = shareSave;
+    $('shPull').onclick = () => sharePull(false);
+    $('shDisconnect').onclick = shareDisconnect;
+    $('shName').addEventListener('change', () => store.set('cnc.userName', $('shName').value.trim()));
+    setInterval(() => shareCheck(false), 30000);
+    // 공유 저장하지 않은 변경이 있으면 창을 닫을 때 한 번 묻는다
+    window.addEventListener('beforeunload', (e) => {
+      if (!S.share.dir || S.isDemo || !S.planner) return;
+      updateDirty();
+      if (S.share.dirty && S.share.dirty.any) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
 
     for (const b of document.querySelectorAll('.tab'))
       b.addEventListener('click', () => {
@@ -6203,6 +6765,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const restored = loadModel(saved.model, saved.source, false, saved);
       toast('이 PC에 저장한 기준으로 시작했습니다 (' + saved.source + ')' + (restored ? ' · 가배정 ' + restored + '건 복원' : ''));
     } else startDemo();
+    // NAS 공유 폴더가 연결돼 있으면 최신 공유 저장본 확인 (내 변경이 없으면 자동으로 가져옴)
+    shareInit();
   });
 })();
 </script>

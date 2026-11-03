@@ -325,3 +325,13 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   .ptable td.c2, .ptable td.c3, .ptable th.pd.off { background: #ddd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 .grid td.mlist { min-width: 180px; max-width: 260px; font-family: var(--mono); font-size: 12px; }
+
+/* NAS 공유 상태 */
+.share-chip { display: inline-flex; align-items: center; gap: 6px; }
+.share-chip .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.share-chip.ok .dot { background: var(--done); }
+.share-chip.dirty .dot { background: var(--draft); }
+.share-chip.newer .dot, .share-chip.need .dot { background: var(--late); }
+.share-status { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--surface-2); font-size: 13px; line-height: 1.6; }
+.share-status b { font-weight: 600; }
+#shBackups ul { margin: 6px 0 0; padding-left: 18px; max-height: 220px; overflow: auto; }

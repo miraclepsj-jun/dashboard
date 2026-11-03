@@ -514,3 +514,15 @@ test('수기 지정호기 (v738 fix21): 희망 시작일, 완료확인 필요 �
   // 3호기는 여전히 자동배정 후보에서는 완료확인 필요
   assert.equal(P.timeline.status('3').delayed, true);
 });
+
+test('가배정 저장·복원: 다중호기·묶음배정 표시가 그대로 (공유 파일 비교에서 안 바뀐 품목이 바뀐 것으로 보이지 않게)', () => {
+  const P = new E.Planner(Demo.build(TODAY), { today: TODAY });
+  P.autoPlan();
+  const st = P.exportState();
+  assert.ok(st.drafts.some((d) => d.multi), '예시 데이터에 다중호기 가배정이 있어야 함');
+  const Q = new E.Planner(Demo.build(TODAY), { today: TODAY });
+  Q.importState(JSON.parse(JSON.stringify(st)));
+  const strip = (s) => s.drafts.map(({ id, ...d }) => d);
+  assert.deepEqual(strip(Q.exportState()), strip(st));
+  assert.match(Q.confirmRows().map((r) => r.note).join(' '), /다중호기\/수량배분/);
+});

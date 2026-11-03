@@ -436,6 +436,13 @@
     return rooms.length ? 'BG 전용방 추정(' + rooms.join('/') + '): ' + band : 'BG전용기준 확인 필요: ' + band;
   }
 
+  /** 저장해 둔 가배정을 다시 넣을 때 유지할 표시 (값이 있는 것만) */
+  function draftMeta(d) {
+    const m = { multi: !!d.multi };
+    for (const k of ['auto', 'manual', 'grade', 'pooled']) if (d[k] !== undefined) m[k] = d[k];
+    return m;
+  }
+
   // ───────────────────────── 배정대상 생성 ─────────────────────────
   /**
    * 원본 붙여넣기 행 → 배정대상 품목 목록 (CNC_CreatePlan_Stage1 + 상태갱신 v592).
@@ -1867,7 +1874,7 @@
       this.removeDraftsForItem(key);
       const allocs = this.allocate(machines, qty, days, Math.min(...backup.map((d) => d.start)), item.partCode);
       if (!allocs) {
-        for (const d of backup) this.addDrafts(item, [d], { auto: d.auto, manual: d.manual, grade: d.grade });
+        for (const d of backup) this.addDrafts(item, [d], draftMeta(d));
         this.results[key] = prevResult;
         return { ok: false, error: '배정 가능한 빈 구간이 없습니다' };
       }
@@ -2053,7 +2060,7 @@
       for (const d of state.drafts) {
         const item = this.itemByKey[d.itemKey];
         if (!item) continue;
-        this.addDrafts(item, [d], { auto: d.auto, manual: d.manual, grade: d.grade });
+        this.addDrafts(item, [d], draftMeta(d));
         n++;
       }
       for (const [k, v] of Object.entries(state.results || {})) if (this.itemByKey[k]) this.results[k] = v;

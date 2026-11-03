@@ -20,6 +20,7 @@
       <button class="btn" id="btnSettings" type="button">기준 설정</button>
       <button class="btn primary" id="btnAuto" type="button">자동 일정수립</button>
       <button class="btn" id="btnExport" type="button">결과 엑셀 내보내기</button>
+      <button class="btn share-chip" id="btnShare" type="button" title="NAS 공유 폴더로 담당자끼리 같은 일정을 씁니다"><span class="dot" aria-hidden="true"></span><span id="shareChip">공유 안 함</span></button>
     </div>
   </header>
 
@@ -129,6 +130,25 @@
   <div class="drawer-body" id="dwBody"></div>
 </aside>
 
+<dialog id="dlgShare" class="dialog">
+  <form method="dialog">
+    <h2>NAS 공유 – 담당자끼리 같은 일정 쓰기</h2>
+    <p class="hint">NAS 폴더의 <b>CNC_공유작업.json</b> 파일 하나에 기준 데이터·가배정·설정을 저장합니다. 서버 없이 이 브라우저가 폴더의 파일을 직접 읽고 씁니다 (외부 통신 없음). 일정을 고친 뒤 <b>[공유 저장]</b>을 누르면 다른 담당자·반장 화면에 반영됩니다. 다른 담당자가 먼저 저장했으면 품목별로 합치고, 같은 품목을 둘 다 고친 경우에만 어느 쪽을 쓸지 묻습니다. 저장할 때마다 이전 파일이 <b>백업</b> 폴더에 남습니다.</p>
+    <div class="row"><label for="shName">내 이름</label><input type="text" id="shName" placeholder="저장자 표시용 (예: 박○○)" style="width:180px"></div>
+    <div class="share-status" id="shStatus"></div>
+    <div class="row">
+      <button class="btn" id="shConnect" type="button">공유 폴더 연결</button>
+      <button class="btn" id="shReconnect" type="button" hidden>다시 연결 (권한 허용)</button>
+      <button class="btn" id="shPull" type="button">가져오기</button>
+      <button class="btn primary" id="shSave" type="button">공유 저장</button>
+      <button class="btn small danger" id="shDisconnect" type="button">연결 끊기</button>
+    </div>
+    <p class="hint">폴더 고르기 창 위쪽 주소 칸에 NAS 폴더 주소(예: <code>\\NAS\생산계획\CNC</code>)를 그대로 입력하고 Enter → [폴더 선택]. 브라우저가 "편집 허용"을 물으면 허용하세요. 다음부터는 열 때 같은 폴더를 자동으로 씁니다 (창을 새로 열면 권한을 한 번 더 물을 수 있음).</p>
+    <details><summary>백업에서 되돌리기</summary><div id="shBackups" class="hint">공유 폴더를 연결하면 목록이 나옵니다</div></details>
+    <div class="dialog-actions"><button class="btn" value="cancel" type="submit">닫기</button></div>
+  </form>
+</dialog>
+
 <dialog id="dlgPaste" class="dialog">
   <form method="dialog" id="pasteForm">
     <h2>엑셀 시트 붙여넣기 (원본·9번·마스터)</h2>
@@ -210,4 +230,5 @@
 <script>/*__LEARN__*/</script>
 <script>/*__MANUAL__*/</script>
 <script>/*__PRINT__*/</script>
+<script>/*__SHARE__*/</script>
 <script>/*__APP_JS__*/</script>
