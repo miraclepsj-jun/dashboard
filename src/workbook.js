@@ -603,12 +603,15 @@
 
     // 2) 일정관리 프로그램 입력요약 (설비1~A)
     const eqHeads = ['설비1', '설비2', '설비3', '설비4', '설비5', '설비6', '설비7', '설비8', '설비9', '설비A'];
-    const prog = [['계획번호', '제품코드', '게시일', '완료일'].concat(eqHeads, ['비고'])];
+    // 11_프로그램입력요약 (v738 fix25 배치): 전산완료일(+1근무일) · 설비1~A · 입력참고 · 부품코드 · 현장개시/완료 · 전산개시/완료
+    const prog = [['계획번호', '제품코드', '전산완료일'].concat(eqHeads, ['입력참고', '부품코드', '현장개시', '현장완료', '전산개시(+1근무일)', '전산완료(+1근무일)'])];
+    const partOf = {};
+    for (const d of planner.drafts) partOf[d.planNo + '|' + d.productCode] = d.partCode;
     for (const p of planner.programSummary()) {
       const eq = eqHeads.map((_, i) => (p.machines[i] != null ? p.machines[i] : null));
-      prog.push([p.planNo, p.productCode, dateCell(p.start), dateCell(p.end)].concat(eq, [p.note]));
+      prog.push([p.planNo, p.productCode, dateCell(p.erpEnd)].concat(eq, [p.note, partOf[p.planNo + '|' + p.productCode] || '', dateCell(p.start), dateCell(p.end), dateCell(p.erpStart), dateCell(p.erpEnd)]));
     }
-    XLSX.utils.book_append_sheet(wb, aoaSheet(prog, [12, 20, 11, 11, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 30]), '프로그램입력요약');
+    XLSX.utils.book_append_sheet(wb, aoaSheet(prog, [12, 20, 12, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 44, 18, 12, 12, 16, 16]), '프로그램입력요약');
 
     // 3) 품목별 결과 (전체)
     const res = [['상태', '판정사유', '계획번호', '제품코드', '부품코드', '발주량', '기존확정', '가배정수량', '잔량', '요청일', '예상완료', '대분류', '생산성분류', '재질', '일생산량', '필요장비일수', '권장대수', '가배정호기']];

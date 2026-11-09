@@ -1186,7 +1186,7 @@
     if (pool.length >= 2) {
       const tot = pool.reduce((a, x) => a + P.workQty(x), 0);
       const poolDays = Math.ceil(tot / it.daily) + 1;
-      const best = P.batchPick(P.candidates(it, { from: S.baseDate }).candidates, 1, poolDays, S.baseDate, it.partCode)[0];
+      const best = P.batchPick(P.candidates(it, { from: P.itemFrom(it, S.baseDate), requiredDays: poolDays }).candidates, 1, poolDays, P.itemFrom(it, S.baseDate), it.partCode, true, it)[0];
       html +=
         '<div class="box"><h3>묶음배정 · 같은 부품·재질 발주 ' + pool.length + '건 (총 ' + nf(tot) + '개)</h3><p class="hint">고른 발주를 호기 1대에 발주일순으로 이어서 배정해 셋팅을 한 번으로 줄입니다. 작업일 = 올림(총량 ÷ 일생산량) + 1(첫 셋팅).</p><div class="cands">' +
         pool.slice(0, 20).map((x) => '<label class="check"><input type="checkbox" data-pool="' + esc(x.key) + '" checked> ' + esc(x.planNo || '(계획번호 없음)') + ' · ' + nf(P.workQty(x)) + '개 · 발주 ' + (x.orderDate ? E.fmtMD(x.orderDate) : '-') + (x.due ? ' · 요청 ' + E.fmtMD(x.due) : '') + '</label>').join('') +
@@ -1194,10 +1194,10 @@
     }
 
     // 후보
-    const q = P.candidates(it, { from: S.baseDate });
+    const q = P.candidates(it, { from: P.itemFrom(it, S.baseDate) });
     const cands = q.candidates;
     const want = days > 0 ? P._countRange(it, days).min : 1;
-    const preset = work > 0 && cands.length ? P.batchPick(cands, want, Math.ceil((days || 1) / want), S.baseDate, it.partCode).map((c) => c.machine) : [];
+    const preset = work > 0 && cands.length ? P.batchPick(cands, want, Math.ceil((days || 1) / want), P.itemFrom(it, S.baseDate), it.partCode, true, it).map((c) => c.machine) : [];
     html += '<div class="box"><h3>호기 선택 ' + (cands.length ? '<span class="hint">후보 ' + cands.length + '대 · ' + (S.settings.allocMode === 'spread' ? '방별 분산·' : '') + '먼저 비는 안전후보 ' + preset.length + '대 미리 선택</span>' : '') + '</h3>';
     if (!cands.length) html += '<p class="hint">' + esc(['PL', 'TE', 'BD'].includes(it.main) ? P.diagText(it, q.diag, q.bd) : '자동추천 대상이 아닌 대분류입니다') + ' · 아래에 호기 번호를 직접 입력하세요.</p>';
     html +=
@@ -1255,7 +1255,7 @@
       );
       if (!ok) return { error: '완료확인 필요 호기(' + delayed.join(', ') + ')는 현장 종료 확인 후에만 배정합니다' };
     }
-    return { ms, from: fromIn != null ? fromIn : S.baseDate, release: delayed, delayed };
+    return { ms, from: fromIn != null ? fromIn : P.itemFrom(it, S.baseDate), release: delayed, delayed };
   }
   function previewDrawer() {
     const P = S.planner;
@@ -1265,10 +1265,11 @@
     if (req.error) return (out.textContent = req.error);
     const qty = Number($('dwQty').value);
     const days = Number($('dwDays').value);
-    const a = P.allocate(req.ms, qty, days, req.from, P.itemByKey[S.openKey].partCode, { release: req.release });
+    const it = P.itemByKey[S.openKey];
+    const a = P.allocate(req.ms, qty, days, req.from, it.partCode, { release: req.release, item: it, waive: days === P.planDays(it, qty) });
     if (!a) return (out.textContent = '배정 가능한 빈 구간이 없습니다');
     out.textContent =
-      a.map((x) => x.machine + ': ' + nf(x.qty) + ' (' + E.fmtMD(x.start) + '~' + E.fmtMD(x.end) + ')').join(' / ') +
+      a.map((x) => x.machine + ': ' + nf(x.qty) + ' (' + E.fmtMD(x.start) + '~' + E.fmtMD(x.end) + (x.setupWaived ? ', 동일부품 연속·셋팅1일 면제' : '') + ')').join(' / ') +
       (req.delayed.length ? ' · ' + req.delayed.join(', ') + '호기는 완료확인 필요 – 기존 일정과 겹치지 않는 빈 구간이며 [선택호기 가배정] 때 현장 종료 확인을 묻습니다' : '');
     return a;
   }
@@ -1379,7 +1380,8 @@
     return tsv(S.planner.confirmRows().map((r) => [r.planNo, r.productCode, r.partCode, r.machine, E.fmtYMD(r.start), E.fmtYMD(r.end), r.qty, r.newSetup, r.worker, '', '', r.note]));
   }
   function programTsv() {
-    return tsv(S.planner.programSummary().map((p) => [p.planNo, p.productCode, E.fmtYMD(p.start), E.fmtYMD(p.end)].concat(Array.from({ length: 10 }, (_, i) => (p.machines[i] != null ? p.machines[i] : '')), [p.note])));
+    // 11_프로그램입력요약 배치 (전산완료일 = 현장완료 +1근무일, fix25)
+    return tsv(S.planner.programSummary().map((p) => [p.planNo, p.productCode, E.fmtYMD(p.erpEnd)].concat(Array.from({ length: 10 }, (_, i) => (p.machines[i] != null ? p.machines[i] : '')), [p.note, '', E.fmtYMD(p.start), E.fmtYMD(p.end), E.fmtYMD(p.erpStart), E.fmtYMD(p.erpEnd)])));
   }
 
   function exportExcel() {
@@ -1404,7 +1406,7 @@
         '<div class="box"><h3>1. 결과 엑셀 파일</h3><p class="hint">9번확정_붙여넣기 · 프로그램입력요약(설비1~A) · 품목별결과 · 간트 시트를 담은 새 파일을 저장합니다. 원본 통합문서는 바꾸지 않습니다.</p><div class="row"><button class="btn primary" type="button" id="exFile">엑셀 파일 저장</button></div></div>' +
         '<div class="box" id="exInitBox"><h3>초기 이관 – 최초 전환 때 한 번만</h3><p class="hint">수기 운영에서 넘어오는 첫날에만 씁니다. 9번 시트(비어 있음) A2에 먼저 붙여넣고, 그 아래에 가배정을 붙여넣으세요. 한 번 붙여넣은 뒤에는 다시 나오지 않습니다.</p><div class="row"><button class="btn" type="button" id="exInitial">초기 이관 행 복사</button><span class="hint" id="exInitialN"></span></div></div>' +
         '<div class="box"><h3>2. 9_설비배정_확정에 바로 붙여넣기</h3><p class="hint">9번 시트의 마지막 행 아래 A열을 선택하고 붙여넣으세요 (계획번호~비고 12열). 그 뒤 기존 매크로로 간트/가용일을 갱신하면 됩니다.</p><div class="row"><button class="btn" type="button" id="exConfirm">9번 붙여넣기용 복사</button><span class="hint" id="exConfirmN"></span></div></div>' +
-        '<div class="box"><h3>3. 일정관리 프로그램 설비1~설비A</h3><p class="hint">계획번호 · 제품코드 · 게시일 · 완료일 · 설비1~설비A · 비고 순서입니다.</p><div class="row"><button class="btn" type="button" id="exProgram">설비1~A 요약 복사</button></div></div>' +
+        '<div class="box"><h3>3. 일정관리 프로그램 설비1~설비A</h3><p class="hint">11_프로그램입력요약 배치: 계획번호 · 제품코드 · 전산완료일 · 설비1~설비A · 입력참고 · 부품코드 · 현장개시 · 현장완료 · 전산개시 · 전산완료. 9번은 현장 실제 가공일이고 전산(회사 일정관리) 입력일은 +1근무일입니다 (v738 fix25).</p><div class="row"><button class="btn" type="button" id="exProgram">설비1~A 요약 복사</button></div></div>' +
         '<div class="dialog-actions"><button class="btn" value="cancel" type="submit">닫기</button></div></form>';
       document.body.appendChild(dlg);
       $('exFile').onclick = exportExcel;
@@ -2046,7 +2048,9 @@
       if (e.target.id === 'poolApply') {
         const keys = [...document.querySelectorAll('[data-pool]:checked')].map((x) => x.dataset.pool);
         const items = S.planner.poolCandidates(S.planner.itemByKey[S.openKey]).filter((x) => keys.includes(x.key));
-        const res = S.planner.poolAssign(items, $('poolMachine').value, Number($('poolDays').value));
+        // 작업일수를 기본값 그대로 두면 0(자동) → 동일부품 연속이면 셋팅 1일 면제 (fix26)
+        const pd = $('poolDays');
+        const res = S.planner.poolAssign(items, $('poolMachine').value, pd.value === pd.defaultValue ? 0 : Number(pd.value));
         if (!res.ok) return ($('poolMsg').textContent = res.error);
         saveDrafts();
         toast('묶음배정 ' + res.rows.length + '건 → ' + res.rows[0].machine + '호기 ' + E.fmtMD(res.rows[0].start) + '~' + E.fmtMD(res.rows[res.rows.length - 1].end));

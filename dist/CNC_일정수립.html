@@ -964,6 +964,18 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
 
   /** 방마스터 기준 적합 판정 (v509). null = 부적합. */
+  /** fix25: 부품/제품코드 전체 또는 하이픈 앞 본체코드의 끝자리가 A (문자열 중간의 A는 아님) */
+  function isRoom2AEnding(partCode, productCode) {
+    for (const raw of [partCode, productCode]) {
+      const c = up(raw).trim();
+      if (!c) continue;
+      if (c.endsWith('A')) return true;
+      const i = c.indexOf('-');
+      if (i > 0 && c.slice(0, i).endsWith('A')) return true;
+    }
+    return false;
+  }
+
   function roomEligible(room, item) {
     if (!room) return null;
     if (up(room.autoUse) === 'N') return null;
@@ -987,7 +999,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
     if (roomProd) {
       if (!containsToken(roomProd, item.prod)) {
-        if (score === 0) return null;
+        // fix25: 2번방은 BECU PL 중 부품/제품(또는 하이픈 앞 본체) 끝자리가 A인 품목을 생산성분류와 무관하게 우선후보로
+        if (String(room.name).replace(/\s/g, '') === '2번방' && up(item.matGroup) === 'BECU' && item.main === 'PL' && isRoom2AEnding(item.partCode, item.productCode)) {
+          score += 50;
+          reason = reason ? reason + ' + 2번방 A형 끝자리(현장 적합확인)' : '2번방 A형 끝자리(현장 적합확인)';
+        } else if (score === 0) return null;
       } else {
         score += 50;
         reason = reason ? reason + ' + 우선생산성분류 일치' : '우선생산성분류 일치';
@@ -1443,6 +1459,21 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const score = delta <= 0 ? 8 : delta <= 3 ? 6 : delta <= 7 ? 4 : delta <= 14 ? 2 : 0;
       return { text, score, start, status: st };
     }
+    /**
+     * v738 fix26/27: start 직전 근무일에 끝나는 작업이 모두 같은 부품·같은 소재면 연속가공(셋팅 1일 면제 대상).
+     * 그날 다른 부품이 끝나거나 소재를 확인할 수 없으면 연속이 아니다. 빈 구간 바로 앞 작업 기준 (마지막 작업 아님).
+     */
+    continuationAt(m, start, partCode, material) {
+      const prev = this.cal.workdays ? this.cal.prevWork(start) : start - 1;
+      const mat = up(material);
+      let same = false;
+      for (const seg of this.segments(m)) {
+        if (seg.e !== prev) continue;
+        if (up(seg.partCode) !== up(partCode) || !mat || up(seg.material) !== mat) return false;
+        same = true;
+      }
+      return same;
+    }
     /** day(=시작일-1) 이전 마지막 구간이 그 사이 근무일 없이 바로 이어지면 반환. 동일부품 연속가공 판단용. */
     prevSegmentEndingAt(m, day) {
       let best = null;
@@ -1696,6 +1727,54 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     setupsOn(m, day) {
       return this.setupCount.get(this.setupKeyOf[m] + '|' + day) || 0;
     }
+    /**
+     * v738 fix27: 필요 작업일수 전체가 들어가는 첫 빈 구간 (확정 일정 사이 빈 날 포함, 마지막 작업 뒤만 보지 않음).
+     * 빈 구간 바로 앞 작업이 같은 부품·소재면 o.noSetupDays(셋팅 1일 뺀 일수)로 더 짧은 구간에도 넣는다 (fix26).
+     * o: {part, material, noSetupDays, ignoreDelay, checkLimit(기본 true: 반 하루 셋팅 한도)}
+     * 반환 {start, days, finish, cont(연속가공), middle(앞뒤에 다른 일정이 있는 중간 빈 구간)} 또는 null
+     */
+    fitStart(m, from, days, o) {
+      o = o || {};
+      const tl = this.timeline;
+      days = Math.max(1, Math.round(days || 1));
+      const noSetup = o.noSetupDays > 0 && o.noSetupDays < days ? o.noSetupDays : null;
+      const room = this.groupOf[m];
+      let x = from;
+      for (let guard = 0; guard < 600; guard++) {
+        const s = tl.gapStart(m, x, 1, o.ignoreDelay);
+        if (s == null) return null;
+        const cont = o.part ? tl.continuationAt(m, s, o.part, o.material) : false;
+        const d = cont && noSetup ? noSetup : days;
+        if (tl.gapStart(m, s, d, o.ignoreDelay) === s) {
+          const limit = o.checkLimit === false ? 0 : this.roomSetupLimit(room, s);
+          if (limit && !cont && !this._isContinuation(m, s, o.part) && this.setupsOn(m, s) >= limit) {
+            x = s + 1;
+            continue;
+          }
+          const finish = this.cal.finish(s, d);
+          let before = false;
+          let after = false;
+          for (const seg of tl._occupied(m)) {
+            if (seg.e < s) before = true;
+            if (seg.s > finish) after = true;
+          }
+          return { start: s, days: d, finish, cont, middle: before && after };
+        }
+        x = s + 1;
+      }
+      return null;
+    }
+    /** 같은 부품 연속가공일 때의 작업일수: 6_생산성기준 여유일(셋팅 1일)이 들어간 품목만 1일 뺀다 */
+    noSetupDays(item, days) {
+      return item && item.buffer > 0 && days >= 2 ? days - 1 : null;
+    }
+    /** v738 fix26: 현장 시작 하한 = 기준게시일, 발주일이 그보다 늦으면 발주일 다음 근무일 */
+    itemFrom(item, from) {
+      const base = from != null ? from : this.baseDate;
+      if (!item || item.orderDate == null) return base;
+      return Math.max(base, this.cal.nextWork(item.orderDate + 1));
+    }
+
     /** 빈 구간 + 반 하루 신규셋팅 한도(인원 × 1인 한도)를 함께 만족하는 시작일. */
     startFor(m, from, days, partCode, ignoreDelay) {
       const tl = this.timeline;
@@ -1764,7 +1843,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       if (main === 'BD') bd = lookupBDSpec(this.model.bdSpecs || [], item.partCode);
       const existing = opts.includeExisting ? new Set() : this.assignedMachines(item);
       const history = this._partHistory(item.partCode);
-      const needDays = opts.requiredDays || 1;
+      // 후보 표시·점수는 실제로 맡길 작업일수가 들어가는 빈 구간 기준 (fix27). 지정 없으면 계획 대수로 나눈 1대분
+      let needDays = opts.requiredDays;
+      if (!needDays) {
+        const tot = this.planDays(item, this.workQty(item) || item.openQty) || 1;
+        needDays = Math.ceil(tot / Math.max(1, this._countRange(item, tot).min));
+      }
+      const noSetup = this.noSetupDays(item, needDays);
 
       for (const mc of this.machines) {
         diag.total++;
@@ -1834,10 +1919,22 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         }
 
         const sm = settingMatch(item.material, item.matGroup, mc.material);
-        const av = this.timeline.availability(mc.no, from);
-        const st = av.status;
-        let availScore = av.score;
-        let availText = av.text;
+        const st = this.timeline.status(mc.no);
+        // fix27: 필요 작업일수가 들어가는 빈 구간 (확정 일정 사이 포함). 완료확인 필요 호기는 실제 빈 구간만 보여주고 점수 0
+        const fit = this.fitStart(mc.no, from, needDays, { part: item.partCode, material: item.material, noSetupDays: noSetup, ignoreDelay: st.delayed, checkLimit: false });
+        let availScore = 0;
+        let availText = '가용 구간 없음';
+        if (fit) {
+          const span = fmtMD(fit.start) + '~' + fmtMD(fit.finish) + (fit.middle ? ' 중간빈일정' : '') + (fit.cont && fit.days < needDays ? ' (연속·셋팅면제)' : '');
+          if (st.delayed) availText = '완료확인 필요 / ' + span;
+          else {
+            const delta = fit.start - Math.max(this.timeline.today, from);
+            availScore = delta <= 0 ? 8 : delta <= 3 ? 6 : delta <= 7 ? 4 : delta <= 14 ? 2 : 0;
+            availText = span;
+          }
+          if (fit.middle) note = appendText(note, '확정일정 사이 빈 구간');
+          if (st.delayed) note = appendText(note, '실적완료 확인 후 확정');
+        } else if (st.delayed) availText = '완료확인 필요';
         const oc = operationConstraint(this.workerRows[mc.no], mc.no, from, item.matGroup, settingFamily(mc.material));
         availScore += oc.penalty;
         availText = appendText(availText, oc.availNote);
@@ -1852,14 +1949,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         else grade = 'B-2차후보';
         grade = operationalGrade(grade, st.work);
 
-        // 연속가공: 가용시작일 직전날 같은 부품+같은 재질로 끝나는 구간
-        let sameCont = 0;
-        let start = null;
-        if (av.start != null) {
-          start = needDays > 1 ? this.timeline.gapStart(mc.no, from, needDays) : av.start;
-          const prev = start != null ? this.timeline.prevSegmentEndingAt(mc.no, start - 1) : null;
-          if (prev && up(prev.partCode) === up(item.partCode) && up(prev.material) && up(prev.material) === up(item.material)) sameCont = 1;
-        }
+        // 연속가공: 고른 빈 구간 바로 앞 작업이 같은 부품+같은 재질 (fix27: 마지막 작업이 아니라 직전 작업 기준)
+        const start = fit && !st.delayed ? fit.start : null;
+        const sameCont = fit && !st.delayed && fit.cont ? 1 : 0;
         out.push({
           machine: mc.no,
           room: str(mc.room),
@@ -1968,6 +2060,16 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const ms = machines.map(machineNo).filter(Boolean);
       if (!ms.length || !(totalQty > 0) || !(totalDays > 0)) return null;
       const rel = new Set(((opts && opts.release) || []).map(machineNo));
+      // 1대 배정: 빈 구간 바로 앞이 같은 부품·소재면 셋팅 1일 면제 (fix26, 수기/자동 공통, opts.waive=false면 면제 안 함)
+      if (ms.length === 1 && opts && opts.item) {
+        const it = opts.item;
+        const fit = this.fitStart(ms[0], from, totalDays, { part: partCode, material: it.material, noSetupDays: opts.waive === false ? null : this.noSetupDays(it, totalDays), ignoreDelay: rel.has(ms[0]) });
+        if (!fit) return null;
+        const r = { machine: ms[0], start: fit.start, end: fit.finish, days: fit.days, qty: totalQty };
+        if (fit.days < Math.round(totalDays)) r.setupWaived = true;
+        if (rel.has(ms[0]) && this.timeline.status(ms[0]).delayed) r.released = true;
+        return [r];
+      }
       const start = ms.map((m) => this.startFor(m, from, 1, partCode, rel.has(m)));
       const valid = start.map((s) => s != null);
       const days = ms.map(() => 0);
@@ -2051,6 +2153,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             qty: a.qty,
             multi: allocs.length > 1,
             released: !!a.released,
+            setupWaived: !!a.setupWaived,
           },
           meta || {}
         );
@@ -2170,7 +2273,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
      *   모자라면 정렬 순서대로 채운다.
      * - B-2차후보는 기본 대수가 모자랄 때(allowBFill)만, C-조건부·일정주의·완료확인 필요는 자동선택하지 않는다.
      */
-    batchPick(cands, count, perDays, from, partCode, allowBFill) {
+    batchPick(cands, count, perDays, from, partCode, allowBFill, item) {
       const allowB = this.opts.allowB !== false && allowBFill !== false;
       const perGroup = this.opts.allocMode === 'fast' ? 0 : this.opts.perGroupMax != null ? this.opts.perGroupMax : 1;
       const wait = this.opts.roomWaitDays != null ? this.opts.roomWaitDays : 14;
@@ -2180,7 +2283,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         if (opPriority(c.work) === 0 || String(c.availText).includes('완료확인 필요')) continue;
         const tier = this.roomTier(c);
         if (tier === 3 && !allowB) continue;
-        const start = this.startFor(c.machine, from, perDays, partCode);
+        // 1대 배정이면 연속가공 셋팅 면제까지 본 빈 구간 (fix26/27), 여러 대면 대당 일수 빈 구간
+        const start =
+          count === 1 && item
+            ? (this.fitStart(c.machine, from, perDays, { part: partCode, material: item.material, noSetupDays: this.noSetupDays(item, perDays) }) || {}).start
+            : this.startFor(c.machine, from, perDays, partCode);
         if (start == null) continue;
         pool.push({ c, tier, key: start - (c.sameCont ? 1 : 0) + tier * wait, group: this.groupOf[c.machine] });
       }
@@ -2215,21 +2322,22 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const qty = this.workQty(item);
       if (qty <= 0) return (this.results[item.key] = { decision: '배정완료', reason: '' });
       const days = this.planDays(item, qty);
-      const from = this.baseDate;
+      const from = this.itemFrom(item);
       const q = this.candidates(item, { from });
       const cands = q.candidates;
       if (!cands.length) return (this.results[item.key] = { decision: '수기검토', reason: this.diagText(item, q.diag, q.bd) });
       const range = this._countRange(item, days);
       let best = null;
       for (let n = range.min; n <= range.max; n++) {
-        const combo = this.batchPick(cands, n, Math.ceil(days / n), from, item.partCode, n === range.min);
+        const combo = this.batchPick(cands, n, Math.ceil(days / n), from, item.partCode, n === range.min, item);
         if (!combo.length) break;
         const a = this.allocate(
           combo.map((c) => c.machine),
           qty,
           days,
           from,
-          item.partCode
+          item.partCode,
+          { item }
         );
         if (!a) continue;
         const finish = Math.max(...a.map((x) => x.end));
@@ -2330,7 +2438,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     checkDesiredStart(day) {
       if (day == null) return '';
       if (day <= this.today) return '희망 시작일은 오늘 이후 날짜로 입력하세요';
-      if (day < this.baseDate) return '희망 시작일은 기준게시일(' + fmtMD(this.baseDate) + ') 이후로 입력하세요';
+      // fix25: 회사 일정관리 개시일은 현장 시작보다 1근무일 늦을 수 있어 기준게시일 1근무일 전까지 허용
+      const lo = this.cal.workdays ? this.cal.prevWork(this.baseDate) : this.baseDate - 1;
+      if (day < lo) return '희망 시작일은 기준게시일(' + fmtMD(this.baseDate) + ')보다 최대 1근무일 앞선 ' + fmtMD(lo) + '부터 입력할 수 있습니다';
       if (!this.cal.isWork(day)) return '희망 시작일이 휴무일입니다 (토·일·23_휴일마스터)';
       return '';
     }
@@ -2342,7 +2452,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     manualAssign(item, machines, opts) {
       const qty = opts && opts.qty > 0 ? Math.min(opts.qty, this.workQty(item) || opts.qty) : this.workQty(item);
       const days = opts && opts.days > 0 ? opts.days : this.planDays(item, qty) || 1;
-      const allocs = this.allocate(machines, qty, days, opts && opts.from, item.partCode, { release: opts && opts.release });
+      // 담당자가 작업일수를 기본값과 다르게 넣었으면 셋팅 면제를 하지 않는다 (fix26 N6 규칙과 같음)
+      const waive = !(opts && opts.days > 0) || opts.days === this.planDays(item, qty);
+      const allocs = this.allocate(machines, qty, days, opts && opts.from != null ? opts.from : this.itemFrom(item), item.partCode, { release: opts && opts.release, item, waive });
       if (!allocs) return null;
       this.addDrafts(item, allocs, { auto: false, manual: true });
       const finish = Math.max(...allocs.map((x) => x.end));
@@ -2495,16 +2607,21 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       const total = parts.reduce((a, x) => a + x.q, 0);
       if (parts.length < 2) return { ok: false, error: '남은 수량이 있는 발주가 2건 미만입니다' };
       const daily = items[0].daily;
-      const days = workdays > 0 ? Math.round(workdays) : Math.ceil(total / daily) + 1;
+      let days = workdays > 0 ? Math.round(workdays) : Math.ceil(total / daily) + 1;
       if (daily * days < total) return { ok: false, error: days + '일로는 묶음 총량 ' + total.toLocaleString('ko-KR') + '개를 만들 수 없습니다 (일생산 ' + daily + ')' };
-      let start = this.startFor(m, this.baseDate, days, items[0].partCode);
-      if (start == null) return { ok: false, error: m + '호기에 ' + days + '근무일 빈 구간이 없습니다' };
+      // fix26: 작업일수를 직접 넣지 않은 묶음은 빈 구간 바로 앞이 같은 부품·소재면 셋팅 1일 면제
+      const from = Math.max(...items.map((it) => this.itemFrom(it)));
+      const fit = this.fitStart(m, from, days, { part: items[0].partCode, material: items[0].material, noSetupDays: workdays > 0 ? null : Math.max(Math.ceil(total / daily), days - 1) });
+      if (!fit) return { ok: false, error: m + '호기에 ' + days + '근무일 빈 구간이 없습니다' };
+      let start = fit.start;
+      const waived = fit.days < days;
+      days = fit.days;
       const rows = [];
       let used = 0;
       parts.forEach((x, i) => {
         const d = i === parts.length - 1 ? days - used : Math.max(1, Math.round((days * x.q) / total));
         const end = this.cal.finish(start, d);
-        rows.push({ it: x.it, alloc: { machine: m, start, end, days: d, qty: x.q } });
+        rows.push({ it: x.it, alloc: { machine: m, start, end, days: d, qty: x.q, setupWaived: waived && i === 0 } });
         used += d;
         start = this.cal.nextWork(end + 1);
       });
@@ -2603,6 +2720,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           d.multi ? '다중호기/수량배분' : '',
           this.cal.workdays ? '근무일기준' : '달력일기준',
           d.released ? '수기 지정호기: 이전 작업 실적완료 미확인 / 일정충돌 없음 / 현장 종료 확인 후 배정' : '',
+          d.setupWaived ? '동일부품 연속·셋팅1일 면제' : '',
         ]
           .filter(Boolean)
           .join('/');
@@ -2639,7 +2757,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         start: e.start,
         end: e.end,
         machines: e.machines.map(Number).sort((a, b) => a - b),
-        note: e.machines.length > 10 ? '10대 초과 - 9번 확정시트 기준 관리' : '',
+        // fix25: 9번은 현장 실제 가공일, 회사 일정관리(전산) 입력일은 +1근무일 참고값
+        erpStart: this.cal.workdays ? this.cal.nextWork(e.start + 1) : e.start + 1,
+        erpEnd: this.cal.workdays ? this.cal.nextWork(e.end + 1) : e.end + 1,
+        note: '9번은 현장 실제 가공일, 전산 입력일은 +1근무일 참고값' + (e.machines.length > 10 ? ' / 10대 초과: 9번 확인' : ''),
       }));
     }
 
@@ -3393,12 +3514,15 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
     // 2) 일정관리 프로그램 입력요약 (설비1~A)
     const eqHeads = ['설비1', '설비2', '설비3', '설비4', '설비5', '설비6', '설비7', '설비8', '설비9', '설비A'];
-    const prog = [['계획번호', '제품코드', '게시일', '완료일'].concat(eqHeads, ['비고'])];
+    // 11_프로그램입력요약 (v738 fix25 배치): 전산완료일(+1근무일) · 설비1~A · 입력참고 · 부품코드 · 현장개시/완료 · 전산개시/완료
+    const prog = [['계획번호', '제품코드', '전산완료일'].concat(eqHeads, ['입력참고', '부품코드', '현장개시', '현장완료', '전산개시(+1근무일)', '전산완료(+1근무일)'])];
+    const partOf = {};
+    for (const d of planner.drafts) partOf[d.planNo + '|' + d.productCode] = d.partCode;
     for (const p of planner.programSummary()) {
       const eq = eqHeads.map((_, i) => (p.machines[i] != null ? p.machines[i] : null));
-      prog.push([p.planNo, p.productCode, dateCell(p.start), dateCell(p.end)].concat(eq, [p.note]));
+      prog.push([p.planNo, p.productCode, dateCell(p.erpEnd)].concat(eq, [p.note, partOf[p.planNo + '|' + p.productCode] || '', dateCell(p.start), dateCell(p.end), dateCell(p.erpStart), dateCell(p.erpEnd)]));
     }
-    XLSX.utils.book_append_sheet(wb, aoaSheet(prog, [12, 20, 11, 11, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 30]), '프로그램입력요약');
+    XLSX.utils.book_append_sheet(wb, aoaSheet(prog, [12, 20, 12, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 44, 18, 12, 12, 16, 16]), '프로그램입력요약');
 
     // 3) 품목별 결과 (전체)
     const res = [['상태', '판정사유', '계획번호', '제품코드', '부품코드', '발주량', '기존확정', '가배정수량', '잔량', '요청일', '예상완료', '대분류', '생산성분류', '재질', '일생산량', '필요장비일수', '권장대수', '가배정호기']];
@@ -5799,7 +5923,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     if (pool.length >= 2) {
       const tot = pool.reduce((a, x) => a + P.workQty(x), 0);
       const poolDays = Math.ceil(tot / it.daily) + 1;
-      const best = P.batchPick(P.candidates(it, { from: S.baseDate }).candidates, 1, poolDays, S.baseDate, it.partCode)[0];
+      const best = P.batchPick(P.candidates(it, { from: P.itemFrom(it, S.baseDate), requiredDays: poolDays }).candidates, 1, poolDays, P.itemFrom(it, S.baseDate), it.partCode, true, it)[0];
       html +=
         '<div class="box"><h3>묶음배정 · 같은 부품·재질 발주 ' + pool.length + '건 (총 ' + nf(tot) + '개)</h3><p class="hint">고른 발주를 호기 1대에 발주일순으로 이어서 배정해 셋팅을 한 번으로 줄입니다. 작업일 = 올림(총량 ÷ 일생산량) + 1(첫 셋팅).</p><div class="cands">' +
         pool.slice(0, 20).map((x) => '<label class="check"><input type="checkbox" data-pool="' + esc(x.key) + '" checked> ' + esc(x.planNo || '(계획번호 없음)') + ' · ' + nf(P.workQty(x)) + '개 · 발주 ' + (x.orderDate ? E.fmtMD(x.orderDate) : '-') + (x.due ? ' · 요청 ' + E.fmtMD(x.due) : '') + '</label>').join('') +
@@ -5807,10 +5931,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
 
     // 후보
-    const q = P.candidates(it, { from: S.baseDate });
+    const q = P.candidates(it, { from: P.itemFrom(it, S.baseDate) });
     const cands = q.candidates;
     const want = days > 0 ? P._countRange(it, days).min : 1;
-    const preset = work > 0 && cands.length ? P.batchPick(cands, want, Math.ceil((days || 1) / want), S.baseDate, it.partCode).map((c) => c.machine) : [];
+    const preset = work > 0 && cands.length ? P.batchPick(cands, want, Math.ceil((days || 1) / want), P.itemFrom(it, S.baseDate), it.partCode, true, it).map((c) => c.machine) : [];
     html += '<div class="box"><h3>호기 선택 ' + (cands.length ? '<span class="hint">후보 ' + cands.length + '대 · ' + (S.settings.allocMode === 'spread' ? '방별 분산·' : '') + '먼저 비는 안전후보 ' + preset.length + '대 미리 선택</span>' : '') + '</h3>';
     if (!cands.length) html += '<p class="hint">' + esc(['PL', 'TE', 'BD'].includes(it.main) ? P.diagText(it, q.diag, q.bd) : '자동추천 대상이 아닌 대분류입니다') + ' · 아래에 호기 번호를 직접 입력하세요.</p>';
     html +=
@@ -5868,7 +5992,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       );
       if (!ok) return { error: '완료확인 필요 호기(' + delayed.join(', ') + ')는 현장 종료 확인 후에만 배정합니다' };
     }
-    return { ms, from: fromIn != null ? fromIn : S.baseDate, release: delayed, delayed };
+    return { ms, from: fromIn != null ? fromIn : P.itemFrom(it, S.baseDate), release: delayed, delayed };
   }
   function previewDrawer() {
     const P = S.planner;
@@ -5878,10 +6002,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     if (req.error) return (out.textContent = req.error);
     const qty = Number($('dwQty').value);
     const days = Number($('dwDays').value);
-    const a = P.allocate(req.ms, qty, days, req.from, P.itemByKey[S.openKey].partCode, { release: req.release });
+    const it = P.itemByKey[S.openKey];
+    const a = P.allocate(req.ms, qty, days, req.from, it.partCode, { release: req.release, item: it, waive: days === P.planDays(it, qty) });
     if (!a) return (out.textContent = '배정 가능한 빈 구간이 없습니다');
     out.textContent =
-      a.map((x) => x.machine + ': ' + nf(x.qty) + ' (' + E.fmtMD(x.start) + '~' + E.fmtMD(x.end) + ')').join(' / ') +
+      a.map((x) => x.machine + ': ' + nf(x.qty) + ' (' + E.fmtMD(x.start) + '~' + E.fmtMD(x.end) + (x.setupWaived ? ', 동일부품 연속·셋팅1일 면제' : '') + ')').join(' / ') +
       (req.delayed.length ? ' · ' + req.delayed.join(', ') + '호기는 완료확인 필요 – 기존 일정과 겹치지 않는 빈 구간이며 [선택호기 가배정] 때 현장 종료 확인을 묻습니다' : '');
     return a;
   }
@@ -5992,7 +6117,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return tsv(S.planner.confirmRows().map((r) => [r.planNo, r.productCode, r.partCode, r.machine, E.fmtYMD(r.start), E.fmtYMD(r.end), r.qty, r.newSetup, r.worker, '', '', r.note]));
   }
   function programTsv() {
-    return tsv(S.planner.programSummary().map((p) => [p.planNo, p.productCode, E.fmtYMD(p.start), E.fmtYMD(p.end)].concat(Array.from({ length: 10 }, (_, i) => (p.machines[i] != null ? p.machines[i] : '')), [p.note])));
+    // 11_프로그램입력요약 배치 (전산완료일 = 현장완료 +1근무일, fix25)
+    return tsv(S.planner.programSummary().map((p) => [p.planNo, p.productCode, E.fmtYMD(p.erpEnd)].concat(Array.from({ length: 10 }, (_, i) => (p.machines[i] != null ? p.machines[i] : '')), [p.note, '', E.fmtYMD(p.start), E.fmtYMD(p.end), E.fmtYMD(p.erpStart), E.fmtYMD(p.erpEnd)])));
   }
 
   function exportExcel() {
@@ -6017,7 +6143,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         '<div class="box"><h3>1. 결과 엑셀 파일</h3><p class="hint">9번확정_붙여넣기 · 프로그램입력요약(설비1~A) · 품목별결과 · 간트 시트를 담은 새 파일을 저장합니다. 원본 통합문서는 바꾸지 않습니다.</p><div class="row"><button class="btn primary" type="button" id="exFile">엑셀 파일 저장</button></div></div>' +
         '<div class="box" id="exInitBox"><h3>초기 이관 – 최초 전환 때 한 번만</h3><p class="hint">수기 운영에서 넘어오는 첫날에만 씁니다. 9번 시트(비어 있음) A2에 먼저 붙여넣고, 그 아래에 가배정을 붙여넣으세요. 한 번 붙여넣은 뒤에는 다시 나오지 않습니다.</p><div class="row"><button class="btn" type="button" id="exInitial">초기 이관 행 복사</button><span class="hint" id="exInitialN"></span></div></div>' +
         '<div class="box"><h3>2. 9_설비배정_확정에 바로 붙여넣기</h3><p class="hint">9번 시트의 마지막 행 아래 A열을 선택하고 붙여넣으세요 (계획번호~비고 12열). 그 뒤 기존 매크로로 간트/가용일을 갱신하면 됩니다.</p><div class="row"><button class="btn" type="button" id="exConfirm">9번 붙여넣기용 복사</button><span class="hint" id="exConfirmN"></span></div></div>' +
-        '<div class="box"><h3>3. 일정관리 프로그램 설비1~설비A</h3><p class="hint">계획번호 · 제품코드 · 게시일 · 완료일 · 설비1~설비A · 비고 순서입니다.</p><div class="row"><button class="btn" type="button" id="exProgram">설비1~A 요약 복사</button></div></div>' +
+        '<div class="box"><h3>3. 일정관리 프로그램 설비1~설비A</h3><p class="hint">11_프로그램입력요약 배치: 계획번호 · 제품코드 · 전산완료일 · 설비1~설비A · 입력참고 · 부품코드 · 현장개시 · 현장완료 · 전산개시 · 전산완료. 9번은 현장 실제 가공일이고 전산(회사 일정관리) 입력일은 +1근무일입니다 (v738 fix25).</p><div class="row"><button class="btn" type="button" id="exProgram">설비1~A 요약 복사</button></div></div>' +
         '<div class="dialog-actions"><button class="btn" value="cancel" type="submit">닫기</button></div></form>';
       document.body.appendChild(dlg);
       $('exFile').onclick = exportExcel;
@@ -6659,7 +6785,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       if (e.target.id === 'poolApply') {
         const keys = [...document.querySelectorAll('[data-pool]:checked')].map((x) => x.dataset.pool);
         const items = S.planner.poolCandidates(S.planner.itemByKey[S.openKey]).filter((x) => keys.includes(x.key));
-        const res = S.planner.poolAssign(items, $('poolMachine').value, Number($('poolDays').value));
+        // 작업일수를 기본값 그대로 두면 0(자동) → 동일부품 연속이면 셋팅 1일 면제 (fix26)
+        const pd = $('poolDays');
+        const res = S.planner.poolAssign(items, $('poolMachine').value, pd.value === pd.defaultValue ? 0 : Number(pd.value));
         if (!res.ok) return ($('poolMsg').textContent = res.error);
         saveDrafts();
         toast('묶음배정 ' + res.rows.length + '건 → ' + res.rows[0].machine + '호기 ' + E.fmtMD(res.rows[0].start) + '~' + E.fmtMD(res.rows[res.rows.length - 1].end));

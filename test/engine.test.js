@@ -526,3 +526,85 @@ test('가배정 저장·복원: 다중호기·묶음배정 표시가 그대로 (
   assert.deepEqual(strip(Q.exportState()), strip(st));
   assert.match(Q.confirmRows().map((r) => r.note).join(' '), /다중호기\/수량배분/);
 });
+
+// v738 fix25~27 ──────────────────────────────────────────
+function gapModel(prevPart) {
+  const m = Demo.build(TODAY); // TODAY = 2026-09-28 (월)
+  m.holidays = [];
+  m.raw = [
+    { planNo: 'G1', productCode: 'PG', partCode: 'PLDB901AR-B', qty: 15000, received: 0, reqDate: TODAY + 40, orderDate: TODAY - 5, material: 'SK-4', refMachines: [] },
+    { planNo: 'X1', productCode: 'PX', partCode: prevPart, qty: 2000, received: 0, reqDate: TODAY + 40, material: 'SK-4', refMachines: [] },
+    { planNo: 'X2', productCode: 'PY', partCode: 'PLDB902AR-B', qty: 2000, received: 0, reqDate: TODAY + 40, material: 'SK-4', refMachines: [] },
+  ];
+  return m;
+}
+const ymd = (y, mo, d) => E.serialFromYMD(y, mo, d);
+
+test('fix27: 확정 일정 사이 빈 구간에 작업일수가 다 들어가면 그 구간을 추천 (마지막 작업 뒤만 보지 않음)', () => {
+  const m = gapModel('PLDB900AR-B');
+  // 1호기: 9/29~9/30 작업, 10/7~10/9 작업 → 사이 빈 근무일 10/1, 10/2, 10/5, 10/6 (4일)
+  m.confirmed = [
+    { planNo: 'X1', productCode: 'PX', partCode: 'PLDB900AR-B', machine: '1', start: ymd(2026, 9, 29), end: ymd(2026, 9, 30), qty: 2000 },
+    { planNo: 'X2', productCode: 'PY', partCode: 'PLDB902AR-B', machine: '1', start: ymd(2026, 10, 7), end: ymd(2026, 10, 9), qty: 2000 },
+  ];
+  const P = new E.Planner(m, { today: TODAY, calendarMode: 'work' });
+  const it = P.items.find((x) => x.planNo === 'G1');
+  assert.equal(P.planDays(it, 15000), 4);
+  const f = P.fitStart('1', P.baseDate, 4, { part: it.partCode, material: it.material });
+  assert.deepEqual([f.start, f.finish, f.middle], [ymd(2026, 10, 1), ymd(2026, 10, 6), true]);
+  const c = P.candidates(it, { requiredDays: 4 }).candidates.find((x) => x.machine === '1');
+  assert.equal(c.start, ymd(2026, 10, 1));
+  assert.match(c.availText, /^10\/1~10\/6 중간빈일정/);
+  assert.equal(c.availText.includes('10/10'), false);
+  const a = P.allocate(['1'], 15000, 4, P.baseDate, it.partCode, { item: it });
+  assert.deepEqual([a[0].start, a[0].end], [ymd(2026, 10, 1), ymd(2026, 10, 6)]);
+  // 빈 구간이 3일뿐이면(뒤 작업 10/6 시작) 그 뒤로
+  m.confirmed[1].start = ymd(2026, 10, 6);
+  const Q = new E.Planner(m, { today: TODAY, calendarMode: 'work' });
+  assert.equal(Q.fitStart('1', Q.baseDate, 4, { part: it.partCode, material: it.material }).start, ymd(2026, 10, 10) + 2, '10/9(금) 뒤 첫 근무일 10/12(월)');
+});
+
+test('fix26/27: 빈 구간 바로 앞이 같은 부품·같은 소재면 셋팅 1일 면제로 더 짧은 구간에도 배정', () => {
+  const m = gapModel('PLDB901AR-B'); // 앞 작업이 같은 부품
+  m.confirmed = [
+    { planNo: 'X1', productCode: 'PX', partCode: 'PLDB901AR-B', machine: '1', start: ymd(2026, 9, 29), end: ymd(2026, 9, 30), qty: 2000 },
+    { planNo: 'X2', productCode: 'PY', partCode: 'PLDB902AR-B', machine: '1', start: ymd(2026, 10, 6), end: ymd(2026, 10, 9), qty: 2000 },
+  ];
+  const P = new E.Planner(m, { today: TODAY, calendarMode: 'work' });
+  const it = P.items.find((x) => x.planNo === 'G1');
+  // 빈 구간 10/1, 10/2, 10/5 = 3일. 기본 4일(가공 3 + 셋팅 1)이지만 연속가공이면 3일
+  const a = P.allocate(['1'], 15000, 4, P.baseDate, it.partCode, { item: it });
+  assert.deepEqual([a[0].start, a[0].end, a[0].days, a[0].setupWaived], [ymd(2026, 10, 1), ymd(2026, 10, 5), 3, true]);
+  const c = P.candidates(it, { requiredDays: 4 }).candidates.find((x) => x.machine === '1');
+  assert.equal(c.sameCont, 1);
+  assert.match(c.availText, /연속·셋팅면제/);
+  P.manualAssign(it, ['1'], { qty: 15000, days: 4 });
+  assert.match(P.confirmRows()[0].note, /동일부품 연속·셋팅1일 면제/);
+  // 담당자가 작업일수를 직접 바꾸면 면제하지 않음
+  const Q = new E.Planner(m, { today: TODAY, calendarMode: 'work' });
+  const b = Q.allocate(['1'], 15000, 4, Q.baseDate, it.partCode, { item: Q.items.find((x) => x.planNo === 'G1'), waive: false });
+  assert.equal(b[0].start, ymd(2026, 10, 12));
+  // 소재가 다르면 면제 아님
+  const m2 = gapModel('PLDB901AR-B');
+  m2.raw[1].material = 'TK-1';
+  m2.confirmed = m.confirmed;
+  const R = new E.Planner(m2, { today: TODAY, calendarMode: 'work' });
+  assert.equal(R.allocate(['1'], 15000, 4, R.baseDate, 'PLDB901AR-B', { item: R.items.find((x) => x.planNo === 'G1') })[0].start, ymd(2026, 10, 12));
+});
+
+test('fix25: 2번방 BECU PL 끝자리 A형 우대 · 전산일 +1근무일 · 희망시작일은 기준게시일 1근무일 전까지', () => {
+  const room2 = { name: '2번방', matGroup: 'BECU', prodClass: 'AR', mainAllowed: 'PL/TE', autoUse: 'Y' };
+  const it = (partCode, productCode) => ({ main: 'PL', matGroup: 'BECU', prod: '커터', partCode, productCode });
+  assert.equal(E.roomEligible(room2, it('PLGC704A-D', 'GC704')).score, 160);
+  assert.equal(E.roomEligible(room2, it('PLGC704-D', 'GC704AM')).score, 110, '끝자리가 아니면 우대 없음');
+  assert.equal(E.roomEligible(room2, it('PLGC704R-D', 'GC704A')).score, 160, '제품코드 끝자리 A');
+  const m = gapModel('PLDB900AR-B');
+  m.confirmed = [];
+  const P = new E.Planner(m, { today: TODAY, calendarMode: 'work', baseDate: ymd(2026, 10, 1) });
+  const g = P.items.find((x) => x.planNo === 'G1');
+  P.manualAssign(g, ['1'], { qty: 15000, days: 4 });
+  const ps = P.programSummary()[0];
+  assert.deepEqual([ps.start, ps.end, ps.erpStart, ps.erpEnd], [ymd(2026, 10, 1), ymd(2026, 10, 6), ymd(2026, 10, 2), ymd(2026, 10, 7)]);
+  assert.equal(P.checkDesiredStart(ymd(2026, 9, 30)), '', '기준게시일 10/1의 1근무일 전');
+  assert.match(P.checkDesiredStart(ymd(2026, 9, 29)), /최대 1근무일/);
+});
