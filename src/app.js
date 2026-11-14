@@ -1612,24 +1612,48 @@
     idb.set('shareBase', S.share.base);
     S.share.newer = false;
   }
+  /**
+   * 연결은 폴더(권장: 백업 폴더도 씀) 또는 공유 파일 하나(폴더 고르기가 막힐 때)로 한다.
+   * 공유 파일 핸들: 폴더면 그 안의 CNC_공유작업.json, 파일이면 그 파일.
+   */
+  const isFileMode = () => S.share.dir && S.share.dir.kind === 'file';
+  async function shareFileHandle(create) {
+    if (isFileMode()) return S.share.dir;
+    return S.share.dir.getFileHandle(Sh.FILE, create ? { create: true } : undefined);
+  }
+  /** 폴더/파일 접근 오류 → 담당자가 알아볼 수 있는 설명 (취소는 '') */
+  function fsErrorText(e) {
+    const n = (e && e.name) || '';
+    if (n === 'AbortError') return '';
+    if (n === 'SecurityError')
+      return '브라우저 보안 규칙으로 막힌 위치입니다. 드라이브 맨 위(C:\\)·바탕화면/문서 폴더 자체·관리 공유(\\\\NAS\\C$ 등)·localhost 주소는 고를 수 없습니다. NAS 공유폴더 안의 일반 폴더를 고르세요';
+    if (n === 'NotAllowedError') return '폴더 사용 권한을 받지 못했습니다. 브라우저가 "편집 허용"을 물으면 [허용]을 눌러야 합니다 (회사 정책으로 막혔을 수도 있음)';
+    if (n === 'NotFoundError') return '폴더·파일을 찾을 수 없습니다. NAS 연결이 끊겼거나 이름이 바뀌었는지 확인하세요';
+    if (n === 'NoModificationAllowedError' || n === 'InvalidModificationError' || n === 'InvalidStateError')
+      return '파일을 쓸 수 없습니다. NAS 폴더의 쓰기 권한이나 보안 프로그램(문서보안·매체제어)을 확인하세요';
+    if (n === 'TypeError' && /picker|not a function/i.test(String(e && e.message))) return '이 브라우저는 폴더 연결을 지원하지 않습니다 (엣지·크롬 최신 버전, IE 모드 아님)';
+    return (n ? n + ': ' : '') + ((e && e.message) || String(e));
+  }
   async function readRemote() {
     let fh;
     try {
-      fh = await S.share.dir.getFileHandle(Sh.FILE);
+      fh = await shareFileHandle(false);
     } catch (e) {
-      return null;
+      if (e && e.name === 'NotFoundError') return null;
+      throw e;
     }
     const file = await fh.getFile();
     const text = await file.text();
     S.share.lastMod = file.lastModified;
+    if (!text.trim()) return null; // 직접 만든 빈 공유 파일
     const st = Sh.parse(text);
     S.share.remote = { rev: st.rev || 0, savedBy: st.savedBy || '', savedAt: st.savedAt || 0 };
     return { st, text };
   }
   async function writeRemote(st, prevText) {
     const dir = S.share.dir;
-    // 덮어쓰기 전 이전 공유 파일을 백업 폴더에 남긴다 (최근 KEEP_BACKUPS개)
-    if (prevText) {
+    // 덮어쓰기 전 이전 공유 파일을 백업 폴더에 남긴다 (최근 KEEP_BACKUPS개, 파일만 연결했으면 백업 없음)
+    if (prevText && !isFileMode()) {
       try {
         const bd = await dir.getDirectoryHandle(Sh.BACKUP_DIR, { create: true });
         let prev = {};
@@ -1650,7 +1674,7 @@
         toast('백업을 남기지 못했습니다: ' + e.message);
       }
     }
-    const fh = await dir.getFileHandle(Sh.FILE, { create: true });
+    const fh = await shareFileHandle(true);
     const w = await fh.createWritable();
     await w.write(JSON.stringify(st));
     await w.close();
@@ -1686,24 +1710,121 @@
     return ov.length ? ' · 같은 호기 일정 겹침 ' + ov.length + '건 (간트에서 확인: ' + [...new Set(ov.map((o) => o.machine))].slice(0, 6).join(', ') + '호기)' : '';
   }
 
-  async function shareConnect() {
-    if (!fsOK) return toast('이 브라우저는 폴더 연결을 지원하지 않습니다. 엣지·크롬 최신 버전을 쓰세요');
-    let dir;
-    try {
-      dir = await window.showDirectoryPicker({ id: 'cnc-share', mode: 'readwrite' });
-    } catch (e) {
-      return; // 취소
+  /**
+   * 연결 점검: 이 폴더에 실제로 파일을 만들고·읽고·지울 수 있는지 (보안 프로그램·NAS 권한 확인용).
+   * 반환 [{step, ok, msg}]. 파일만 연결했으면 그 파일 읽기만 본다 (공유 파일을 건드리지 않음).
+   */
+  async function shareDiagnose(dir) {
+    const out = [];
+    const step = async (name, fn) => {
+      try {
+        const msg = await fn();
+        out.push({ step: name, ok: true, msg: msg || '' });
+        return true;
+      } catch (e) {
+        out.push({ step: name, ok: false, msg: fsErrorText(e) || '취소됨' });
+        return false;
+      }
+    };
+    await step('브라우저', async () => {
+      if (!fsOK) throw new TypeError('picker not a function');
+      return (navigator.userAgent.match(/Edg\/[\d.]+|Chrome\/[\d.]+/) || ['?'])[0];
+    });
+    if (!dir) return out;
+    await step('권한', async () => {
+      const p = await dir.queryPermission({ mode: 'readwrite' });
+      if (p !== 'granted') throw Object.assign(new Error('권한 상태: ' + p), { name: 'NotAllowedError' });
+      return '편집 허용됨';
+    });
+    if (dir.kind === 'file') {
+      await step('공유 파일 읽기', async () => {
+        const f = await dir.getFile();
+        return f.size ? Math.round(f.size / 1024) + 'KB' : '빈 파일 (첫 [공유 저장] 때 채워짐)';
+      });
+      return out;
+    }
+    await step('폴더 읽기', async () => {
+      let n = 0;
+      for await (const _ of dir.entries()) if (++n > 200) break;
+      return '항목 ' + n + '개';
+    });
+    const name = '_CNC연결점검_' + Date.now() + '.tmp';
+    const wrote = await step('파일 쓰기', async () => {
+      const fh = await dir.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      await w.write('CNC 연결 점검 ' + new Date().toISOString());
+      await w.close();
+      const t = await (await fh.getFile()).text();
+      if (!t.startsWith('CNC 연결 점검')) throw Object.assign(new Error('쓴 내용을 다시 읽지 못함'), { name: 'InvalidStateError' });
+      return '쓰기·다시 읽기 정상';
+    });
+    if (wrote) await step('시험 파일 지우기', async () => dir.removeEntry(name));
+    return out;
+  }
+  function diagHtml(list) {
+    return list.map((x) => (x.ok ? '✅ ' : '❌ ') + '<b>' + esc(x.step) + '</b> ' + esc(x.msg)).join('<br>');
+  }
+  async function shareTest() {
+    const list = await shareDiagnose(S.share.dir);
+    $('shDiag').innerHTML = (S.share.dir ? '' : '공유 폴더가 아직 연결되지 않았습니다. [공유 폴더 연결]을 먼저 하세요.<br>') + diagHtml(list);
+  }
+  /** 고른 폴더(또는 파일)로 연결: 쓰기 시험을 통과해야 연결로 저장한다 */
+  async function useShareHandle(dir) {
+    const diag = await shareDiagnose(dir);
+    if ($('dlgShare').open) $('shDiag').innerHTML = diagHtml(diag);
+    const bad = diag.find((x) => !x.ok);
+    if (bad) {
+      toast('공유 연결 실패 – ' + bad.step + ': ' + bad.msg);
+      return false;
     }
     S.share.dir = dir;
     S.share.perm = 'granted';
     S.share.base = null;
     await idb.set('shareDir', dir);
     await idb.del('shareBase');
+    return true;
+  }
+  async function shareConnect() {
+    if (!fsOK) return toast('이 브라우저는 폴더 연결을 지원하지 않습니다. 엣지·크롬 최신 버전을 쓰세요 (IE 모드 아님)');
+    let dir;
+    try {
+      dir = await window.showDirectoryPicker({ id: 'cnc-share', mode: 'readwrite' });
+    } catch (e) {
+      const msg = fsErrorText(e);
+      if (msg) {
+        $('shDiag').innerHTML = '❌ <b>폴더 고르기</b> ' + esc(msg);
+        toast('폴더를 고르지 못했습니다 – ' + msg);
+      } else $('shDiag').innerHTML = '폴더 고르기를 취소했습니다. [폴더 선택] 버튼이 눌리지 않으면 아래 "폴더가 안 골라질 때"를 확인하세요.';
+      return;
+    }
+    if (!(await useShareHandle(dir))) return;
+    await afterConnect();
+  }
+  /** 폴더 고르기가 끝내 안 될 때: NAS의 공유 파일 하나를 직접 고른다 (백업 폴더는 쓰지 못함) */
+  async function shareConnectFile() {
+    if (typeof window.showOpenFilePicker !== 'function') return toast('이 브라우저는 파일 직접 연결을 지원하지 않습니다');
+    const exists = window.confirm('NAS에 ' + Sh.FILE + ' 파일이 이미 있습니까?\n\n[확인] = 있는 파일 고르기 (다른 담당자가 만든 파일)\n[취소] = 새로 만들기 (처음 한 명만)');
+    const types = [{ description: 'CNC 공유작업', accept: { 'application/json': ['.json'] } }];
+    let fh;
+    try {
+      if (exists) {
+        [fh] = await window.showOpenFilePicker({ id: 'cnc-share-file', types, multiple: false });
+        if ((await fh.requestPermission({ mode: 'readwrite' })) !== 'granted') throw Object.assign(new Error('편집 허용 거부'), { name: 'NotAllowedError' });
+      } else fh = await window.showSaveFilePicker({ id: 'cnc-share-file', suggestedName: Sh.FILE, types });
+    } catch (e) {
+      const msg = fsErrorText(e);
+      if (msg) toast('공유 파일을 고르지 못했습니다 – ' + msg);
+      return;
+    }
+    if (!(await useShareHandle(fh))) return;
+    await afterConnect();
+  }
+  async function afterConnect() {
     let remote = null;
     try {
       remote = await readRemote();
     } catch (e) {
-      return toast('공유 파일을 읽지 못했습니다: ' + e.message);
+      return toast('공유 파일을 읽지 못했습니다: ' + fsErrorText(e));
     }
     if (remote) {
       const r = remote.st;
@@ -1747,7 +1868,7 @@
     try {
       remote = await readRemote();
     } catch (e) {
-      return toast('공유 파일을 읽지 못했습니다: ' + e.message);
+      return toast('공유 파일을 읽지 못했습니다: ' + fsErrorText(e));
     }
     let st = currentState();
     let note = '';
@@ -1765,7 +1886,7 @@
     try {
       ok = await writeRemote(st, remote && remote.text);
     } catch (e) {
-      return toast('공유 저장 실패: ' + e.message + ' (NAS 연결·폴더 권한 확인)');
+      return toast('공유 저장 실패: ' + fsErrorText(e));
     }
     setBase(st);
     renderShare();
@@ -1777,7 +1898,7 @@
     try {
       remote = await readRemote();
     } catch (e) {
-      return toast('공유 파일을 읽지 못했습니다: ' + e.message);
+      return toast('공유 파일을 읽지 못했습니다: ' + fsErrorText(e));
     }
     if (!remote) return silent || toast('공유 파일이 아직 없습니다');
     const r = remote.st;
@@ -1805,7 +1926,7 @@
     if (!S.share.dir || S.share.perm !== 'granted' || !S.planner) return;
     if (!force && document.hidden) return;
     try {
-      const fh = await S.share.dir.getFileHandle(Sh.FILE);
+      const fh = await shareFileHandle(false);
       const f = await fh.getFile();
       if (!force && f.lastModified === S.share.lastMod) return updateDirty();
       const remote = await readRemote();
@@ -1859,14 +1980,14 @@
     $('shareChip').textContent = txt;
     if (!$('dlgShare').open) return;
     $('shReconnect').hidden = !(sh.dir && sh.perm !== 'granted');
-    $('shConnect').textContent = sh.dir ? '공유 폴더 바꾸기' : '공유 폴더 연결';
+    $('shConnect').textContent = sh.dir && !isFileMode() ? '공유 폴더 바꾸기' : '공유 폴더 연결';
     for (const id of ['shPull', 'shSave', 'shDisconnect']) $(id).disabled = !sh.dir || sh.perm !== 'granted';
     const d = sh.dirty;
     $('shStatus').innerHTML = !fsOK
       ? '<span class="late-text">이 브라우저는 폴더 연결을 지원하지 않습니다 (엣지·크롬 최신 버전 필요)</span>'
       : !sh.dir
       ? '공유 폴더가 연결되어 있지 않습니다. 이 PC의 기준·가배정은 이 PC에만 있습니다.'
-      : '연결 폴더: <b>' + esc(sh.dir.name) + '</b>' + (sh.perm !== 'granted' ? ' <span class="late-text">(권한 다시 허용 필요)</span>' : '') +
+      : (isFileMode() ? '연결 파일: <b>' + esc(sh.dir.name) + '</b> (파일 직접 연결 · 백업 없음)' : '연결 폴더: <b>' + esc(sh.dir.name) + '</b>') + (sh.perm !== 'granted' ? ' <span class="late-text">(권한 다시 허용 필요)</span>' : '') +
         '<br>공유 파일: ' + (sh.remote ? '<b>' + sh.remote.rev + '번째</b> 저장 · ' + esc(sh.remote.savedBy || '-') + ' · ' + fmtTime(sh.remote.savedAt) : '아직 없음') +
         (sh.newer ? ' <span class="late-text">← 내가 맞춘 뒤 새로 저장됨, [가져오기]</span>' : '') +
         '<br>내 화면: ' + (d && d.any ? '<b>공유 저장 안 한 변경</b> ' + [d.items ? '품목 ' + d.items + '건' : '', d.model.length ? '시트 ' + d.model.join(', ') : '', d.settings ? '기준 설정' : ''].filter(Boolean).join(' · ') : '공유 파일과 같음');
@@ -1874,6 +1995,7 @@
   async function renderBackups() {
     const box = $('shBackups');
     if (!S.share.dir || S.share.perm !== 'granted') return (box.textContent = '공유 폴더를 연결하면 목록이 나옵니다');
+    if (isFileMode()) return (box.textContent = '공유 파일만 직접 연결해서 백업 폴더를 쓰지 않습니다. 폴더로 연결하면 저장할 때마다 백업이 남습니다');
     try {
       const bd = await S.share.dir.getDirectoryHandle(Sh.BACKUP_DIR, { create: true });
       const names = [];
@@ -1954,6 +2076,8 @@
     $('pasteClear').onclick = clearSaved;
     $('btnShare').onclick = () => (S.share.dir && S.share.perm !== 'granted' ? shareReconnect() : openShare());
     $('shConnect').onclick = shareConnect;
+    $('shConnectFile').onclick = shareConnectFile;
+    $('shTest').onclick = shareTest;
     $('shReconnect').onclick = shareReconnect;
     $('shSave').onclick = shareSave;
     $('shPull').onclick = () => sharePull(false);
